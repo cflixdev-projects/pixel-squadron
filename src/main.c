@@ -1040,6 +1040,15 @@ int main(int argc, char **argv)
         else                                      input = (InputState){ 0 };
 
 #if defined(__EMSCRIPTEN__)
+        /* Hide the OS cursor during play; show it in menus. */
+        if (g.state == STATE_PLAY) {
+            EM_ASM({ document.getElementById('canvas').style.cursor = 'none'; });
+        } else {
+            EM_ASM({ document.getElementById('canvas').style.cursor = 'crosshair'; });
+        }
+#endif
+
+#if defined(__EMSCRIPTEN__)
         if (g.state == STATE_PLAY) {
             EM_ASM({
                 var dbg = document.getElementById('debug');

@@ -47,7 +47,6 @@
 <body>
   <canvas class="emscripten" id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
 
-  <div id="debug" style="position:fixed;top:4px;left:4px;z-index:20;color:#7ee2fa;font:11px monospace;pointer-events:none;opacity:0.85;"></div>
   <div id="overlay">
     <div id="title">PIXEL SQUADRON</div>
     <div id="bar"><i id="prog"></i></div>
@@ -60,71 +59,16 @@
     var barEl     = document.getElementById('prog');
     var canvasEl  = document.getElementById('canvas');
   window.__mx = 240; window.__my = 135; window.__moved = 0;
-  var __locked = false;
   var __mx = 240, __my = 135;
-  var __escCount = 0;
-  var __escTimer = 0;
 
   function trackMouse(e) {
-    if (__locked) {
-      // Pointer lock: relative movement with reduced sensitivity to counteract
-      // OS mouse acceleration. Accumulated and clamped to the virtual screen.
-      var sens = 0.4;
-      __mx += e.movementX * sens;
-      __my += e.movementY * sens;
-      if (__mx < 0) __mx = 0; if (__mx > 480) __mx = 480;
-      if (__my < 0) __my = 0; if (__my > 270) __my = 270;
-    } else {
-      var r = canvasEl.getBoundingClientRect();
-      if (r.width > 0 && r.height > 0) {
-        __mx = (e.clientX - r.left) * (480.0 / r.width);
-        __my = (e.clientY - r.top)  * (270.0 / r.height);
-      }
+    var r = canvasEl.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) {
+      __mx = (e.clientX - r.left) * (480.0 / r.width);
+      __my = (e.clientY - r.top)  * (270.0 / r.height);
     }
     window.__mx = __mx; window.__my = __my; window.__moved++;
-    var dbg = document.getElementById('debug');
-    if (dbg) dbg.textContent = 'jsMouse: ' + Math.round(__mx) + ',' + Math.round(__my) + ' locked:' + __locked;
   }
-
-  // Request pointer lock + fullscreen on click during play.
-  canvasEl.addEventListener('mousedown', function() {
-    if (!__locked && canvasEl.requestPointerLock) {
-      canvasEl.requestPointerLock();
-    }
-    // Request fullscreen on first click too.
-    if (!document.fullscreenElement && !document.webkitFullscreenElement) {
-      var el = canvasEl;
-      (el.requestFullscreen || el.webkitRequestFullscreen || function(){}).call(el);
-    }
-  });
-
-  document.addEventListener('pointerlockchange', function() {
-    __locked = (document.pointerLockElement === canvasEl);
-    if (__locked) {
-      canvasEl.style.cursor = 'none';
-    } else {
-      canvasEl.style.cursor = 'crosshair';
-    }
-  });
-
-  // Escape handling: 1st press pauses (stay fullscreen), 2nd exits fullscreen.
-  window.addEventListener('keydown', function(e) {
-    if (e.key !== 'Escape' && e.code !== 'Escape') return;
-    if (__locked) {
-      // Browser exits pointer lock automatically on Escape.
-      // The game will also pause (handled by C code).
-    }
-    // Track escape presses for fullscreen exit.
-    __escCount++;
-    clearTimeout(__escTimer);
-    __escTimer = setTimeout(function() { __escCount = 0; }, 1000);
-    if (__escCount >= 2) {
-      __escCount = 0;
-      if (document.fullscreenElement || document.webkitFullscreenElement) {
-        (document.exitFullscreen || document.webkitExitFullscreen).call(document);
-      }
-    }
-  }, true);
 
   window.addEventListener('mousemove', trackMouse, true);
   canvasEl.addEventListener('mousemove', trackMouse, true);
