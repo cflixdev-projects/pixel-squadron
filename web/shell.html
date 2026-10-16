@@ -62,9 +62,13 @@
   window.__mx = -1; window.__my = -1; window.__moved = 0;
   function trackMouse(e) {
     var r = canvasEl.getBoundingClientRect();
-    var sx = (e.clientX - r.left) * (canvasEl.width  / r.width);
-    var sy = (e.clientY - r.top)  * (canvasEl.height / r.height);
-    window.__mx = sx; window.__my = sy; window.__moved++;
+    // Report in VIRTUAL space (0..480, 0..270) so the C side does not
+    // have to guess the canvas/backing-store scale.
+    var vx = (e.clientX - r.left) * (480.0 / r.width);
+    var vy = (e.clientY - r.top)  * (270.0 / r.height);
+    window.__mx = vx; window.__my = vy; window.__moved++;
+    var dbg = document.getElementById('debug');
+    if (dbg) dbg.textContent = 'jsMouse: ' + Math.round(vx) + ',' + Math.round(vy);
   }
   window.addEventListener('mousemove', trackMouse, true);
   canvasEl.addEventListener('mousemove', trackMouse, true);

@@ -326,21 +326,22 @@ static void GatherInput(void)
     if (IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN))  move.y += 1.0f;
 
 #if defined(__EMSCRIPTEN__)
-    /* The browser's own mouse tracking is more reliable than raylib's
-       web backend, which can lose events when the canvas is focused or
-       scaled. Fall back to raylib's value if JS has not seen a move. */
+    /* The JS tracker reports in VIRTUAL space (0..480, 0..270), so no
+       scaling guesswork is needed. Fall back to raylib's value if JS has
+       not seen a move yet. */
     Vector2 rawMouse;
     int jsmx = EM_ASM_INT({ return (window.__mx >= 0) ? window.__mx : -1; });
     int jsmy = EM_ASM_INT({ return (window.__my >= 0) ? window.__my : -1; });
     if (jsmx >= 0 && jsmy >= 0) {
         rawMouse = V2((float)jsmx, (float)jsmy);
     } else {
-        rawMouse = GetMousePosition();
+        rawMouse = ScreenToVirtual(GetMousePosition());
     }
+    Vector2 mouseVirtual = rawMouse;
 #else
     Vector2 rawMouse = GetMousePosition();
-#endif
     Vector2 mouseVirtual = ScreenToVirtual(rawMouse);
+#endif
 
     bool firing  = IsMouseButtonDown(MOUSE_BUTTON_LEFT) || IsKeyDown(KEY_SPACE);
     bool boosting = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
@@ -418,7 +419,7 @@ static void GatherInput(void)
     }
 
     if (!padMode) {
-        Vector2 mouseWorld = GetScreenToWorld2D(rawMouse, camera);
+        Vector2 mouseWorld = V2Add(camera.target, V2Sub(mouseVirtual, V2(BASE_W * 0.5f, BASE_H * 0.5f)));
         Vector2 toMouse    = V2Sub(mouseWorld, g.player.pos);
         if (V2Len(toMouse) > 1.0f) aim = V2Norm(toMouse);
     }
@@ -1018,15 +1019,6 @@ int main(int argc, char **argv)
 
         if (g.autoPilot && g.state == STATE_PLAY) AutoPilotInput(dt);
         else if (g.state == STATE_PLAY)           GatherInput();
-#if defined(__EMSCRIPTEN__)
-        if (g.state == STATE_PLAY) {
-            EM_ASM({
-                var dbg = document.getElementById('debug');
-                if (dbg) dbg.textContent = 'jsMouse:' + window.__mx + ',' + window.__my +
-                    ' | reticle:' + $0 + ',' + $1 + ' aim:' + $2.toFixed(2) + ',' + $3.toFixed(2) + ' pad:' + $4;
-            }, (int)input.reticle.x, (int)input.reticle.y, input.aim.x, input.aim.y, input.usingGamepad);
-        }
-#endif
         else                                      input = (InputState){ 0 };
 
         /* The game draws its own crosshair on the aim point, so the OS arrow
