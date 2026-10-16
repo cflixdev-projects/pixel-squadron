@@ -75,13 +75,14 @@ static const char *AssetPath(const char *rel)
  * ----------------------------------------------------------------------- */
 
 /* Rebuild a grid sheet with a replicated border around every cell, so that
-   sampling at a cell edge can never reach the neighbouring sprite. */
-static Image PadAtlas(Image sheet, int cell, int cols, int rows)
+   sampling at a cell edge can never reach the neighbouring sprite. Rows past
+   `srcRows` are left blank for whatever wants to fill them in later. */
+static Image PadAtlas(Image sheet, int cell, int cols, int srcRows, int rows)
 {
     const int stride = cell + ATLAS_PAD * 2;
     Image padded = GenImageColor(stride * cols, stride * rows, BLANK);
 
-    for (int r = 0; r < rows; r++) {
+    for (int r = 0; r < srcRows; r++) {
         for (int c = 0; c < cols; c++) {
             /* source cell and its destination slot */
             Rectangle cellRec = { (float)(c * cell), (float)(r * cell),
@@ -138,7 +139,7 @@ static Texture2D LoadAtlas(const char *relative, int cell, int cols, int rows)
         return (Texture2D){ 0 };
     }
 
-    Image padded = PadAtlas(sheet, cell, cols, rows);
+    Image padded = PadAtlas(sheet, cell, cols, rows, rows);
     UnloadImage(sheet);
 
     Texture2D texture = LoadTextureFromImage(padded);
@@ -159,13 +160,135 @@ Rectangle AtlasSource(int idx, int cols, int cell)
     };
 }
 
+/* The key pass runs later in this file; the atlas builder needs it declared. */
+static void KeyOutTileBackground(Image *img, int cell, int cols,
+                                 const int *cells, int count);
+
+/* Repaint one crag stamp into one biome's colours, and drop the copy in a
+   spare cell of the atlas. The sheet's crags are a single hot orange: a tint
+   can only ever darken a sprite, so no amount of tinting turns them grey, and
+   an orange crag on a snowfield was the one thing the biome work never fixed.
+   There are only three rock tones in the art, so this is a straight swap. */
+static void BakeBiomeCrag(Image *img, int cols, int cell, int src, int dst,
+                          const Color ramp[3])
+{
+    static const Color kFrom[3] = {
+        { 244, 172, 102, 255 },   /* highlight */
+        { 252, 104,  59, 255 },   /* mid       */
+        { 222,  75,  30, 255 },   /* dark      */
+    };
+    const int stride = cell + ATLAS_PAD * 2;
+    const int sc = src % cols, sr = src / cols;
+    const int dc = dst % cols, dr = dst / cols;
+
+    /* the padding is copied too, so the baked cell's border replicates the
+       repainted pixels rather than the old ones */
+    for (int y = -ATLAS_PAD; y < cell + ATLAS_PAD; y++) {
+        for (int x = -ATLAS_PAD; x < cell + ATLAS_PAD; x++) {
+            int sx = sc * stride + ATLAS_PAD + x;
+            int sy = sr * stride + ATLAS_PAD + y;
+            int dx = dc * stride + ATLAS_PAD + x;
+            int dy = dr * stride + ATLAS_PAD + y;
+
+            if (sx < 0 || sy < 0 || sx >= img->width  || sy >= img->height) continue;
+            if (dx < 0 || dy < 0 || dx >= img->width  || dy >= img->height) continue;
+
+            Color at = GetImageColor(*img, sx, sy);
+
+            for (int i = 0; i < 3; i++) {
+                if (at.r == kFrom[i].r && at.g == kFrom[i].g && at.b == kFrom[i].b) {
+                    at = ramp[i];
+                    break;
+                }
+            }
+
+            /* everything else - the ink outline, and the transparent ground
+               the key pass left behind - is copied across untouched */
+            ImageDrawPixel(img, dx, dy, at);
+        }
+    }
+}
+
+/* The tilesheet, with the cover stamps cut out so the biome underneath shows,
+   and the crags baked out once per biome. */
+static Texture2D LoadTilesAtlas(void)
+{
+    Image sheet = LoadImage(AssetPath("sprites/tiles.png"));
+    if (sheet.data == NULL) {
+        TraceLog(LOG_ERROR, "ASSETS: failed to load 'sprites/tiles.png'");
+        return (Texture2D){ 0 };
+    }
+
+    Image padded = PadAtlas(sheet, TILE_CELL, TILE_COLS, 10, TILE_ROWS);
+    UnloadImage(sheet);
+
+    static const int cover[] = {
+        TILE_TREE_A, TILE_TREE_B, TILE_TREE_C, TILE_ROCK, TILE_ROCK_ALT,
+    };
+    KeyOutTileBackground(&padded, TILE_CELL, TILE_COLS, cover, 5);
+
+    for (int b = 0; b < BIOME_COUNT; b++) {
+        BakeBiomeCrag(&padded, TILE_COLS, TILE_CELL,
+                      TILE_ROCK,     TILE_ROCK_BIOME     + b, kRockRamp[b]);
+        BakeBiomeCrag(&padded, TILE_COLS, TILE_CELL,
+                      TILE_ROCK_ALT, TILE_ROCK_ALT_BIOME + b, kRockRamp[b]);
+    }
+
+    Texture2D texture = LoadTextureFromImage(padded);
+    UnloadImage(padded);
+
+    SetTextureFilter(texture, TEXTURE_FILTER_POINT);
+    return texture;
+}
+
+/* The cover stamps on the tilesheet - every tree and every crag - are drawn
+   sitting on a patch of the base grass, so each one carried its own little
+   green square around with it. That is invisible on a green island and glaring
+   everywhere else. Clearing that green to transparent lets whatever ground the
+   biome actually painted show through instead, which is what makes a pine in
+   the snow look like a pine in the snow rather than a pine in a lawn. */
+static void KeyOutTileBackground(Image *img, int cell, int cols,
+                                 const int *cells, int count)
+{
+    /* the three greens the base grass is made of, plus the sand tone the sheet
+       bleeds in along the cell borders */
+    static const Color bg[] = {
+        { 182, 213,  60, 255 },
+        { 166, 196,  46, 255 },
+        { 201, 231,  80, 255 },
+        { 203, 129,  94, 255 },
+    };
+    const int stride = cell + ATLAS_PAD * 2;
+
+    for (int n = 0; n < count; n++) {
+        int c = cells[n] % cols;
+        int r = cells[n] / cols;
+
+        for (int y = -ATLAS_PAD; y < cell + ATLAS_PAD; y++) {
+            for (int x = -ATLAS_PAD; x < cell + ATLAS_PAD; x++) {
+                int px = c * stride + ATLAS_PAD + x;
+                int py = r * stride + ATLAS_PAD + y;
+                if (px < 0 || py < 0 || px >= img->width || py >= img->height) continue;
+
+                Color at = GetImageColor(*img, px, py);
+                for (int i = 0; i < (int)(sizeof bg / sizeof bg[0]); i++) {
+                    if (at.r == bg[i].r && at.g == bg[i].g && at.b == bg[i].b) {
+                        ImageDrawPixel(img, px, py, BLANK);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
 /* --------------------------------------------------------------------------
  *  Loading
  * ----------------------------------------------------------------------- */
 void AssetsLoad(void)
 {
     assets.ships = LoadAtlas("sprites/ships.png", SHIP_CELL, SHIP_COLS, 6);
-    assets.tiles = LoadAtlas("sprites/tiles.png", TILE_CELL, TILE_COLS, 10);
+    assets.tiles = LoadTilesAtlas();
 
     /* Departure Mono. Loaded at 14 so the rasterised em lands on the font's
        native 11px grid (see the note on Assets.font). */

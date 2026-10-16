@@ -51,15 +51,6 @@ enum {
  *  seam - palette and waterline both - so crossing from one into the next
  *  reads as weather rather than as a tile boundary.
  * ----------------------------------------------------------------------- */
-typedef enum {
-    BIOME_TEMPERATE = 0,
-    BIOME_DESERT,
-    BIOME_SNOW,
-    BIOME_ASH,
-    BIOME_JUNGLE,
-    BIOME_COUNT
-} BiomeId;
-
 typedef struct {
     float landLevel;    /* below this is water          */
     float sandLevel;    /* ...and between the two, sand */
@@ -76,41 +67,63 @@ typedef struct {
     int   id;           /* which biome this sample is closest to      */
 } Biome;
 
+/* The three tones the crag stamps are painted in - highlight, mid, dark -
+   repainted for each biome. A tint cannot do this: multiplying an orange can
+   only make a darker orange, so the crags have to be baked, and this is the
+   palette each bake uses. */
+const Color kRockRamp[BIOME_COUNT][3] = {
+    /* TEMPERATE - the sheet's own hot orange, untouched */
+    { { 244, 172, 102, 255 }, { 252, 104,  59, 255 }, { 222,  75,  30, 255 } },
+    /* DESERT    - sun-bleached sandstone */
+    { { 250, 208, 152, 255 }, { 238, 168, 106, 255 }, { 204, 124,  74, 255 } },
+    /* SNOW      - bare grey rock under the ice */
+    { { 208, 220, 234, 255 }, { 150, 166, 186, 255 }, { 104, 118, 140, 255 } },
+    /* ASH       - banked down to a dull char */
+    { { 168,  86,  52, 255 }, { 118,  52,  34, 255 }, {  78,  34,  26, 255 } },
+    /* JUNGLE    - overgrown, mossy boulders */
+    { { 150, 178, 110, 255 }, { 104, 132,  72, 255 }, {  66,  88,  50, 255 } },
+};
+
 /* All the decorations on the sheet are pines and red crags, so the palette
    carries the identity: the same stamp reads as scrub in the desert, as a
    frosted pine in the snow and as a stand of jungle in the green. */
 static const Biome kBiomes[BIOME_COUNT] = {
     /* TEMPERATE - the original green archipelago, exactly as it always was */
     { 0.435f, 0.472f,
-      { 255, 255, 255, 255 }, { 255, 255, 255, 255 }, { 0, 0, 0, 0 },
+      { 255, 255, 255, 255 }, { 255, 255, 255, 255 },
+      { 0, 0, 0, 0 },
       { {  16,  66,  96, 255 }, {  26, 108, 148, 255 },
         {  44, 197, 246, 255 }, { 126, 226, 250, 255 } },
       { 223, 246, 245, 255 }, 72, 93, 0 },
 
     /* DESERT - wide sand, and grass that has gone to straw */
     { 0.410f, 0.505f,
-      { 255, 255, 255, 255 }, { 255, 255, 255, 255 }, { 240, 175, 120, 115 },
+      { 255, 255, 255, 255 }, { 255, 255, 255, 255 },
+      { 240, 175, 120, 115 },
       { {  22,  84, 118, 255 }, {  38, 142, 170, 255 },
         {  74, 206, 226, 255 }, { 154, 240, 246, 255 } },
       { 246, 250, 238, 255 }, 200, 88, 1 },
 
     /* SNOW - a flat, pale country, thin ice shelves, frosted pines */
     { 0.428f, 0.452f,
-      { 255, 235, 255, 255 }, { 255, 240, 255, 255 }, { 208, 220, 248, 209 },
+      { 255, 235, 255, 255 }, { 255, 240, 255, 255 },
+      { 208, 220, 248, 209 },
       { {  22,  48,  82, 255 }, {  38,  84, 126, 255 },
         {  70, 140, 186, 255 }, { 140, 196, 224, 255 } },
       { 240, 250, 255, 255 }, 80, 90, 2 },
 
     /* ASH - basalt underfoot and burning shallows, nothing green anywhere */
     { 0.448f, 0.462f,
-      { 255, 230, 255, 255 }, { 255, 235, 240, 255 }, {  48,  48,  54, 219 },
+      { 255, 230, 255, 255 }, { 255, 235, 240, 255 },
+      {  48,  48,  54, 219 },
       { {  26,  16,  18, 255 }, {  58,  26,  24, 255 },
         { 122,  46,  28, 255 }, { 226, 118,  46, 255 } },
       { 255, 176,  96, 255 }, 200, 86, 3 },
 
     /* JUNGLE - deep, wet, overgrown */
     { 0.440f, 0.466f,
-      { 170, 230, 160, 255 }, { 180, 225, 165, 255 }, {  30,  80,  40,  64 },
+      { 170, 230, 160, 255 }, { 180, 225, 165, 255 },
+      {  30,  80,  40,  64 },
       { {  14,  58,  50, 255 }, {  22,  92,  74, 255 },
         {  40, 132, 104, 255 }, { 104, 178, 140, 255 } },
       { 214, 240, 220, 255 }, 52, 97, 4 },
@@ -389,6 +402,7 @@ typedef struct {
     Color   ground;      /* the wash laid over the ground tile            */
     Color   water;
     Color   foam;
+    uint8_t biome;       /* which biome owns the tile, for the crag stamps */
 } TileInfo;
 
 /* The visible rectangle, cached for one frame. Sized for the largest window
@@ -405,14 +419,17 @@ static Color WaterShade(float h, const Biome *b)
     return b->water[3];
 }
 
-static int DecorSprite(int decor)
+/* Which atlas cell to stamp for a decoration. The crags come in a per-biome
+   flavour - the sheet only has the hot orange ones - while the pines are the
+   same art everywhere and get their colour from the local light instead. */
+static int DecorSprite(int decor, int biome)
 {
     switch (decor) {
         case DECOR_TREE_A: return TILE_TREE_A;
         case DECOR_TREE_B: return TILE_TREE_B;
         case DECOR_TREE_C: return TILE_TREE_C;
-        case DECOR_ROCK_A: return TILE_ROCK;
-        case DECOR_ROCK_B: return TILE_ROCK_ALT;
+        case DECOR_ROCK_A: return TILE_ROCK_BIOME     + biome;
+        case DECOR_ROCK_B: return TILE_ROCK_ALT_BIOME + biome;
         default:           return -1;
     }
 }
@@ -491,6 +508,7 @@ void ArenaDraw(Camera2D cam)
             s_view[j][i].ground    = b.ground;
             s_view[j][i].foam      = b.foam;
             s_view[j][i].water     = WaterShade(h, &b);
+            s_view[j][i].biome     = (uint8_t)b.id;
         }
     }
 
@@ -552,18 +570,21 @@ void ArenaDraw(Camera2D cam)
     /* --- pass 3: cover ---------------------------------------------- */
     for (int j = 0; j < ny; j++) {
         for (int i = 0; i < nx; i++) {
-            int sprite = DecorSprite(s_view[j][i].decor);
+            int sprite = DecorSprite(s_view[j][i].decor, s_view[j][i].biome);
             if (sprite < 0) continue;
 
             int tx = x0 + i;
             int ty = y0 + j;
 
-            /* Cover keeps its own colours but picks up the local light, so a
-               pine reads as frosted in the snow and as dry scrub in the sand. */
-            bool  tree  = (s_view[j][i].decor >= DECOR_TREE_A &&
-                           s_view[j][i].decor <= DECOR_TREE_C);
-            Color light = tree ? s_view[j][i].grassTint : s_view[j][i].sandTint;
-            Color tint  = MixColor(light, (Color){ 255, 255, 255, 255 }, 0.45f);
+            /* A pine picks up the local light, so it reads as frosted in the
+               snow and as dry scrub in the sand. A crag does not: it already
+               carries its biome's own rock colour, baked in at load, and the
+               land it stands on is whatever the biome painted. */
+            bool  tree = (s_view[j][i].decor >= DECOR_TREE_A &&
+                          s_view[j][i].decor <= DECOR_TREE_C);
+            Color tint = tree
+                       ? MixColor(s_view[j][i].grassTint, (Color){ 255, 255, 255, 255 }, 0.45f)
+                       : WHITE;
 
             DrawTerrainTile(sprite, (float)(tx * TILE_SIZE), (float)(ty * TILE_SIZE),
                             (TileVariation(tx, ty) & 1u) != 0, false, tint);

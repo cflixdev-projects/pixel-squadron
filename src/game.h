@@ -123,7 +123,32 @@ enum TileSprite {
     TILE_ROCK_ALT     = 72,
     TILE_SAND         = 56,
     TILE_SAND_ALT     = 116,
+
+    /* The sheet's two crags are painted in a single hot orange, which is right
+       on a green island and wrong almost everywhere else - and a tint can only
+       darken, so it can never make them grey. Instead the two stamps are baked
+       out again once per biome at load time, into two spare rows of the atlas
+       (see BakeBiomeCrag in assets.c). */
+    TILE_ROCK_BIOME     = 120,  /* + biome index, 5 cells */
+    TILE_ROCK_ALT_BIOME = 132,  /* ...the peak variant   */
 };
+
+/* The atlas grows two rows so the crags can be baked out once per biome. */
+#define TILE_ROWS 12
+
+/* Which country a tile belongs to. */
+typedef enum {
+    BIOME_TEMPERATE = 0,
+    BIOME_DESERT,
+    BIOME_SNOW,
+    BIOME_ASH,
+    BIOME_JUNGLE,
+    BIOME_COUNT
+} BiomeId;
+
+/* The three tones the crag stamps are painted in, repainted per biome:
+   light, mid, dark, in the order the sheet uses them. Arena owns the table. */
+extern const Color kRockRamp[BIOME_COUNT][3];
 
 /* -------------------------------------------------------------------------
  *  Palette - sampled straight out of the Kenney tilesheet so that code
@@ -156,9 +181,34 @@ enum TileSprite {
 #define ALLY_RESPAWN 15.0f  /* seconds before a downed wingman rejoins */
 #define ALLY_POWER_TIME  9.0f    /* a weapon crate keeps a wingman hot   */
 #define ALLY_SHIELD_TIME 8.0f    /* a shield crate keeps a wingman alive  */
-#define ALLY_CRATE_RANGE 240.0f  /* how far they will detour for loot    */
+#define ALLY_CRATE_RANGE 430.0f  /* how far they will detour for loot    */
+#define ALLY_CRATE_RUSH  190.0f  /* ...and how close a crate has to be to
+                                    make them break off a fight for it     */
 
 #define PLAYER_MAX_HP 100.0f
+
+/* Player buff durations, so the HUD can draw a meter for each. */
+#define POWER_DURATION    10.0f   /* seconds of the rapid-fire buff  */
+#define SHIELD_DURATION    6.0f
+
+/* Weapon crates the player can find out on the map. */
+#define PLAYER_QUAD_TIME   7.0f
+#define PLAYER_SPREAD_TIME 7.0f
+#define PLAYER_HOMING_TIME 8.0f
+
+/* The player's ultimate: a radial shove that clears the deck and makes the
+   next second and a bit free. */
+#define SPECIAL_COOLDOWN 15.0f
+#define SPECIAL_RADIUS   150.0f
+#define SPECIAL_DAMAGE   90.0f
+#define SPECIAL_SHIELD   1.4f
+
+/* JUNO's dome. */
+#define FIELD_LIFE      4.5f
+#define FIELD_RADIUS    86.0f
+#define FIELD_SHOVE     250.0f  /* speed enemies are pushed out at         */
+#define FIELD_HEAL      9.0f    /* hull per second to everyone inside      */
+#define FIELD_COOLDOWN  16.0f
 
 /* Holding Shift spends boost fuel for a short burst of extra top speed. */
 #define PLAYER_BOOST_FUEL 1.6f   /* seconds of boost available          */
@@ -199,6 +249,10 @@ typedef struct {
     int weaponLevel;   /* 1..3 */
     float hitFlash;
     float boostFuel;   /* seconds of boost left (0..PLAYER_BOOST_FUEL) */
+    float specialTimer;/* counts down to the next special attack      */
+    float quadTimer;   /* weapon crates that are running right now    */
+    float spreadTimer;
+    float homingTimer;
     bool alive;
 } Player;
 
@@ -279,6 +333,9 @@ typedef struct {
     float   rallyTimer;    /* >0 while answering the player's recall */
     float   powerTimer;    /* >0 while their guns are hot from a crate */
     float   shieldTimer;   /* >0 while a shield crate is holding      */
+    float   quadTimer;     /* >0 while they are carrying the other crates */
+    float   spreadTimer;
+    float   homingTimer;
 } Ally;
 
 typedef struct {
@@ -311,9 +368,13 @@ typedef struct {
 } Burst;
 
 typedef enum {
-    PICK_HEALTH,
-    PICK_POWER,
-    PICK_SHIELD,
+    PICK_HEALTH,     /* hull repair                                   */
+    PICK_POWER,      /* hot guns and a weapon level                    */
+    PICK_SHIELD,     /* a few seconds of not being hit at all          */
+    PICK_QUAD,       /* four barrels at once                          */
+    PICK_SPREAD,     /* a wide close-range fan                        */
+    PICK_HOMING,     /* rounds that steer themselves                  */
+    PICK_KIND_COUNT
 } PickupKind;
 
 typedef struct {
@@ -333,6 +394,19 @@ typedef struct {
     Color   color;
 } Popup;
 
+/* JUNO's answer to being surrounded: a bubble she drops around herself that
+   shoves enemies and their fire out of the way, patching up everyone standing
+   inside it while it holds. The idea is that the squadron gets a few seconds
+   to breathe, look at the board and take the fight back up on its own terms. */
+typedef struct {
+    bool    alive;
+    Vector2 pos;      /* follows the caster while it holds */
+    float   life;     /* seconds left                      */
+    float   radius;
+    float   pulse;    /* animation phase                   */
+    bool    dropped;  /* a supply crate was handed out     */
+} AegisField;
+
 typedef enum {
     STATE_TITLE,     /* attract card over the land the next run will start on */
     STATE_PLAY,
@@ -349,10 +423,44 @@ typedef struct {
     bool firing;
     bool boost;           /* Shift held - spend boost fuel for speed */
     bool rally;           /* Q / left shoulder - call the wing home   */
+    bool special;         /* the player's own ultimate                */
     bool usingGamepad;
 } InputState;
 
 extern InputState input;
+
+/* -------------------------------------------------------------------------
+ *  Controls
+ *  The pad answers to whatever the player tells it to. Only the pad is
+ *  remappable: the keyboard is roomy enough that the defaults are never in
+ *  anyone's way, and a half-remapped keyboard is just a way to get stuck.
+ * ---------------------------------------------------------------------- */
+typedef enum {
+    BIND_FIRE = 0,   /* hold to shoot  */
+    BIND_BOOST,      /* burn for speed  */
+    BIND_RECALL,     /* bring the wing  */
+    BIND_SPECIAL,    /* ultimate        */
+    BIND_COUNT
+} BindAction;
+
+typedef struct {
+    int button[BIND_COUNT];  /* GAMEPAD_BUTTON_* ids */
+} Bindings;
+
+extern Bindings binds;
+
+void BindsLoadDefaults(void);
+void BindsLoad(void);
+void BindsSave(void);
+const char *BindName(int action);
+const char *PadButtonName(int button);
+
+/* The controls panel on the pause screen: main.c owns the state, hud.c draws
+   it. RemapSelection is the action being edited, RemapArmed is "waiting for a
+   button to be pressed". */
+bool RemapActive(void);
+int  RemapSelection(void);
+bool RemapArmed(void);
 
 /* -------------------------------------------------------------------------
  *  Global game state (defined in main.c)
@@ -427,6 +535,9 @@ typedef struct {
     float rallyTimer;    /* >0 while the squadron is answering a recall */
     int   crits;         /* how many shots landed critically this run  */
     int   allyKills[MAX_ALLIES];  /* wing kills, per slot - the wing's rank */
+    int   allyLevel;     /* how many times the wing has been rearmed    */
+    float levelUpFlash;  /* >0 while the "WINGMEN LEVEL UP" banner runs */
+    AegisField field;    /* JUNO's dome, when it is up                  */
 
     /* feel */
     float shake;
@@ -534,6 +645,12 @@ void EntitiesReset(void);
 void PlayerUpdate(float dt);
 void PlayerDraw(void);
 void PlayerDamage(float amount);
+/* The player's own ultimate, fired from the HUD meter. */
+void PlayerSpecial(void);
+/* JUNO's bubble: cast it, tick it, draw it. */
+void FieldCast(Ally *caster);
+void FieldUpdate(float dt);
+void FieldDraw(void);
 
 void EnemiesUpdate(float dt);
 void EnemiesDraw(void);

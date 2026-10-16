@@ -15,6 +15,14 @@
  *  Pixel text helpers
  * ----------------------------------------------------------------------- */
 
+/* One loaded weapon crate on the HUD: what it is called, how much of it is
+   left, and the colour it is known by everywhere else. */
+typedef struct {
+    const char *label;
+    float       frac;
+    Color       color;
+} WeaponChip;
+
 /* Advance between glyph cells. The digits carry a little transparent padding
    around the actual glyph, so 12px reads tighter than the raw 16px cell. */
 #define GLYPH_ADV 12.0f
@@ -183,35 +191,97 @@ void HudDraw(Camera2D cam)
     DrawTextPixShadow(assets.font, biome, V2(floorf((RENDER_W - biomeW) * 0.5f), 30), 1,
                       (Color){ 168, 196, 204, 200 });
 
-    /* --- boost + recall meters, bottom left --------------------------- */
+    /* --- boost, recall and ultimate meters, bottom left --------------- */
+    char rallyLabel[32], specialLabel[32];
+    snprintf(rallyLabel,   sizeof rallyLabel,   "RALLY Q/%s",   BindName(BIND_RECALL));
+    snprintf(specialLabel, sizeof specialLabel, "BLAST E/%s",   BindName(BIND_SPECIAL));
+
+    /* The pad button in the label can be as long as two characters, so the
+       three meters are laid out from their measured widths rather than from
+       guesses - otherwise the labels collide on a narrow window. */
+    const char *boostLabel = "BOOST";
+    float bx = 8.0f;
+    float bw = fmaxf(72.0f, TextWidthPix(assets.font, boostLabel,    1));
+    float rx = bx + bw + 12.0f;
+    float rw = fmaxf(72.0f, TextWidthPix(assets.font, rallyLabel,    1));
+    float sx = rx + rw + 12.0f;
+    float sw = fmaxf(72.0f, TextWidthPix(assets.font, specialLabel,  1));
+
     float y = RENDER_H - 30.0f;
 
     /* Boost is a core control, so its meter is always on. */
-    DrawTextPixShadow(assets.font, "BOOST", V2(8, y), 1, COL_SHALLOW);
-    DrawTimerBar((Rectangle){ 8, y + 13, 72, 5 }, p->boostFuel / PLAYER_BOOST_FUEL,
+    DrawTextPixShadow(assets.font, boostLabel, V2(bx, y), 1, COL_SHALLOW);
+    DrawTimerBar((Rectangle){ bx, y + 13, bw, 5 }, p->boostFuel / PLAYER_BOOST_FUEL,
                  (Color){ 255, 236, 159, 230 });
 
     /* The recall radio needs a moment to recharge between calls. */
     bool rallyReady = (g.rallyCool <= 0.0f);
-    DrawTextPixShadow(assets.font, "RALLY Q", V2(96, y), 1,
+    DrawTextPixShadow(assets.font, rallyLabel, V2(rx, y), 1,
                       rallyReady ? COL_ALLY_UI : (Color){ 96, 116, 134, 255 });
-    DrawTimerBar((Rectangle){ 96, y + 13, 72, 5 },
+    DrawTimerBar((Rectangle){ rx, y + 13, rw, 5 },
                  1.0f - g.rallyCool / RALLY_COOLDOWN,
                  rallyReady ? (Color){ 126, 226, 250, 230 }
                             : (Color){ 90, 122, 152, 220 });
-    y -= 22.0f;
 
-    if (p->powerTimer > 0.0f) {
-        DrawTextPixShadow(assets.font, "RAPID FIRE", V2(8, y), 1,
-                          (Color){ 255, 200, 80, 255 });
-        DrawTimerBar((Rectangle){ 8, y + 13, 72, 5 }, p->powerTimer / 10.0f,
-                     (Color){ 126, 226, 250, 230 });
-        y -= 22.0f;
+    /* ...and the player's own ultimate. */
+    bool blastReady = (p->specialTimer <= 0.0f);
+    DrawTextPixShadow(assets.font, specialLabel, V2(sx, y), 1,
+                      blastReady ? (Color){ 255, 186, 92, 255 }
+                                 : (Color){ 96, 116, 134, 255 });
+    DrawTimerBar((Rectangle){ sx, y + 13, sw, 5 },
+                 1.0f - p->specialTimer / SPECIAL_COOLDOWN,
+                 blastReady ? (Color){ 255, 186, 92, 230 }
+                            : (Color){ 90, 122, 152, 220 });
+
+    /* --- what the guns are loaded with --------------------------------
+       Every crate that is running gets a chip down at the bottom, so the
+       player can see at a glance what is loaded and how long is left. */
+    {
+        WeaponChip chip[5];
+        int n = 0;
+
+        if (p->powerTimer  > 0.0f) chip[n++] = (WeaponChip){ "RAPID",  p->powerTimer  / POWER_DURATION,    (Color){ 255, 200,  80, 255 } };
+        if (p->shieldTimer > 0.0f) chip[n++] = (WeaponChip){ "SHIELD", p->shieldTimer / SHIELD_DURATION,   (Color){ 126, 226, 250, 255 } };
+        if (p->quadTimer   > 0.0f) chip[n++] = (WeaponChip){ "QUAD",   p->quadTimer   / PLAYER_QUAD_TIME,   (Color){ 198, 150, 255, 255 } };
+        if (p->spreadTimer > 0.0f) chip[n++] = (WeaponChip){ "SPREAD", p->spreadTimer / PLAYER_SPREAD_TIME, (Color){ 255, 186,  92, 255 } };
+        if (p->homingTimer > 0.0f) chip[n++] = (WeaponChip){ "SEEKER", p->homingTimer / PLAYER_HOMING_TIME, (Color){ 140, 235, 150, 255 } };
+
+        if (n > 0) {
+            const float cw = 54.0f, gap = 4.0f;
+            float total = (float)n * cw + (float)(n - 1) * gap;
+            float cx    = floorf((RENDER_W - total) * 0.5f);
+            float cy    = RENDER_H - 62.0f;
+
+            for (int i = 0; i < n; i++) {
+                DrawRectangle((int)cx, (int)cy, (int)cw, 15, (Color){ 12, 20, 28, 200 });
+                DrawRectangle((int)cx, (int)cy, (int)cw, 1, chip[i].color);
+                DrawTextPix(assets.font, chip[i].label, V2(cx + 4.0f, cy + 3.0f), 1, chip[i].color);
+                DrawTimerBar((Rectangle){ cx, cy + 15.0f, cw, 3 }, chip[i].frac, chip[i].color);
+                cx += cw + gap;
+            }
+        }
     }
-    if (p->shieldTimer > 0.0f) {
-        DrawTextPixShadow(assets.font, "SHIELD", V2(8, y), 1, COL_SHALLOW);
-        DrawTimerBar((Rectangle){ 8, y + 13, 72, 5 }, p->shieldTimer / 6.0f,
-                     (Color){ 126, 226, 250, 230 });
+
+    /* --- the wing's rearm banner --------------------------------------
+       Every other wave the wing gets measurably better. That is worth a
+       shout, because otherwise it just looks like they stopped dying. */
+    if (g.levelUpFlash > 0.0f) {
+        char up[40];
+        snprintf(up, sizeof up, "WINGMEN LEVEL %d", g.allyLevel + 1);
+
+        /* fade in over the first third of a second, hold, then fade out over
+           the last half second of the three */
+        float k = Clamp(g.levelUpFlash / 3.0f, 0.0f, 1.0f);
+        float a = (k > 0.9f) ? (1.0f - k) / 0.1f : Clamp(k * 6.0f, 0.0f, 1.0f);
+        a = Clamp(a, 0.0f, 1.0f);
+        float w = TextWidthPix(assets.font, up, 1);
+
+        DrawRectangle(0, 42, RENDER_W, 19, (Color){ 255, 186, 92, (unsigned char)(95.0f * a) });
+        DrawRectangle(0, 42, RENDER_W, 1,  (Color){ 255, 236, 159, (unsigned char)(230.0f * a) });
+        DrawRectangle(0, 60, RENDER_W, 1,  (Color){ 255, 236, 159, (unsigned char)(230.0f * a) });
+
+        Color c = { 255, 236, 159, (unsigned char)(255.0f * a) };
+        DrawTextPixShadow(assets.font, up, V2(floorf((RENDER_W - w) * 0.5f), 46), 1, c);
     }
 
     /* --- floating message --------------------------------------------- */
@@ -247,9 +317,12 @@ void HudDraw(Camera2D cam)
         if (sp.x > 10 && sp.x < RENDER_W - 10 &&
             sp.y > 10 && sp.y < RENDER_H - 10) continue;
 
-        Color c = (p->kind == PICK_POWER)  ? (Color){ 255, 236, 159, 210 }
-                : (p->kind == PICK_HEALTH) ? (Color){ 140, 245, 170, 210 }
-                                           : (Color){ 126, 226, 250, 210 };
+        Color c = (p->kind == PICK_POWER)   ? (Color){ 255, 236, 159, 210 }
+                : (p->kind == PICK_HEALTH)  ? (Color){ 140, 245, 170, 210 }
+                : (p->kind == PICK_QUAD)    ? (Color){ 198, 150, 255, 210 }
+                : (p->kind == PICK_SPREAD)  ? (Color){ 255, 186,  92, 210 }
+                : (p->kind == PICK_HOMING)  ? (Color){ 140, 235, 150, 210 }
+                                            : (Color){ 126, 226, 250, 210 };
 
         Vector2 edge = V2(Clamp(sp.x, 6.0f, RENDER_W - 6.0f),
                           Clamp(sp.y, 6.0f, RENDER_H - 6.0f));
@@ -290,16 +363,33 @@ void HudDraw(Camera2D cam)
                     V2(floorf(edge.x - w * 0.5f), floorf(edge.y + 12.0f)), 1, c);
     }
 
-    /* --- reticle, only when the mouse is doing the aiming ------------- */
-    if (!input.usingGamepad && g.player.alive) {
+    /* --- reticle -------------------------------------------------------
+       The crosshair is always up, whichever hand is driving. On the mouse it
+       sits on the pointer; on the pad it rides out along the aim vector, so
+       there is still something on screen saying where the guns point - and
+       it is drawn in the colour of whatever the guns are loaded with. */
+    if (g.player.alive) {
+        Vector2 aimAt = input.reticle;
+
+        if (input.usingGamepad) {
+            Vector2 ray = (V2Len(input.aim) > 0.01f) ? input.aim
+                                                     : V2(cosf(p->angle), sinf(p->angle));
+            aimAt = WorldToScreen(V2Add(p->pos, V2Scale(ray, 54.0f)));
+        }
+
         /* The crosshair sits exactly on the point the guns are aimed at: the
            shots fly down the ray from the nose through this pixel, so whatever
            the middle of the box is over is what gets hit. The box is an odd
            size on purpose, so its centre pixel *is* the aim point. */
-        int cx = (int)floorf(input.reticle.x);
-        int cy = (int)floorf(input.reticle.y);
+        Color box = (p->quadTimer   > 0.0f) ? (Color){ 198, 150, 255, 190 }
+                  : (p->spreadTimer > 0.0f) ? (Color){ 255, 186,  92, 190 }
+                  : (p->homingTimer > 0.0f) ? (Color){ 140, 235, 150, 190 }
+                                            : (Color){ 223, 246, 245, 120 };
 
-        DrawRectangleLines(cx - 6, cy - 6, 13, 13, (Color){ 223, 246, 245, 120 });
+        int cx = (int)floorf(aimAt.x);
+        int cy = (int)floorf(aimAt.y);
+
+        DrawRectangleLines(cx - 6, cy - 6, 13, 13, box);
         DrawRectangle(cx - 1, cy - 1, 3, 3, (Color){ 255, 130, 140, 210 });
     }
 
@@ -380,8 +470,10 @@ void HudDrawTitle(void)
                      (Color){ 126, 226, 250, 190 });
     DrawTextCentered("MOUSE / RIGHT STICK  -  AIM", (int)top + 162, 1, assets.font,
                      (Color){ 126, 226, 250, 190 });
-    DrawTextCentered("LMB / RT - FIRE   SHIFT / LT - BOOST   Q / LB - RALLY",
+    DrawTextCentered("LMB / RT - FIRE   SHIFT / B - BOOST   Q / X - RECALL",
                      (int)top + 174, 1, assets.font, (Color){ 126, 226, 250, 190 });
+    DrawTextCentered("E / Y - BLAST   C - PAD CONTROLS",
+                     (int)top + 186, 1, assets.font, (Color){ 126, 226, 250, 190 });
 
     if (g.highScore > 0) {
         char best[48];
@@ -462,10 +554,57 @@ void HudDrawPause(void)
 
     int centre = (int)floorf(RENDER_H * 0.5f);
 
-    DrawTextCentered("PAUSED", centre - 22, 2, assets.font, COL_FOAM);
-    DrawTextCentered("P / ESC / START  -  RESUME", centre + 12, 1, assets.font, COL_SHALLOW);
+    if (RemapActive()) {
+        /* --- the pad controls panel ----------------------------------- */
+        static const char *const kLabel[BIND_COUNT] = {
+            "FIRE", "BOOST", "RECALL", "SPECIAL"
+        };
+
+        DrawTextCentered("PAD CONTROLS", centre - 76, 2, assets.font, COL_FOAM);
+        DrawTextCentered("LEFT STICK MOVE    RIGHT STICK AIM + SHOOT",
+                         centre - 52, 1, assets.font, (Color){ 126, 226, 250, 170 });
+
+        float x = floorf((float)RENDER_W * 0.5f) - 70.0f;
+        float y = (float)centre - 30.0f;
+
+        for (int i = 0; i < BIND_COUNT; i++) {
+            bool sel = (i == RemapSelection());
+
+            if (sel) {
+                DrawRectangle((int)x - 10, (int)y - 4, 160, 15, (Color){ 255, 186, 92, 60 });
+                DrawRectangle((int)x - 10, (int)y - 4, 2, 15, (Color){ 255, 236, 159, 255 });
+            }
+
+            char line[48];
+            snprintf(line, sizeof line, "%-9s %s", kLabel[i], BindName(i));
+            DrawTextPix(assets.font, line, V2(x, y), 1,
+                        sel ? (Color){ 255, 236, 159, 255 } : COL_SHALLOW);
+
+            y += 16.0f;
+        }
+
+        float blink = 0.55f + 0.45f * sinf(g.timer * 4.0f);
+        Color prompt = COL_FOAM;
+        prompt.a = (unsigned char)(120.0f + 135.0f * blink);
+
+        if (RemapArmed()) {
+            DrawTextCentered("PRESS A PAD BUTTON  -  ESC TO CANCEL",
+                             centre + 44, 1, assets.font, prompt);
+        } else {
+            DrawTextCentered("W / S  -  CHOOSE    ENTER  -  REBIND",
+                             centre + 44, 1, assets.font, prompt);
+            DrawTextCentered("R  -  DEFAULTS      C / ESC  -  DONE",
+                             centre + 58, 1, assets.font, (Color){ 126, 226, 250, 160 });
+        }
+        return;
+    }
+
+    DrawTextCentered("PAUSED", centre - 34, 2, assets.font, COL_FOAM);
+    DrawTextCentered("P / ESC / START  -  RESUME", centre - 2, 1, assets.font, COL_SHALLOW);
     DrawTextCentered("WASD / LEFT STICK - MOVE    MOUSE / RIGHT STICK - AIM",
+                     centre + 14, 1, assets.font, (Color){ 126, 226, 250, 160 });
+    DrawTextCentered("LMB / RT - FIRE    SHIFT / B - BOOST",
                      centre + 28, 1, assets.font, (Color){ 126, 226, 250, 160 });
-    DrawTextCentered("LMB / RT - FIRE    SHIFT / LT - BOOST    Q / LB - RALLY",
+    DrawTextCentered("Q / X - RECALL    E / Y - BLAST    C - PAD CONTROLS",
                      centre + 42, 1, assets.font, (Color){ 126, 226, 250, 160 });
 }

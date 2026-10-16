@@ -13,6 +13,10 @@
 #include <string.h>
 #include <time.h>
 
+#if defined(__EMSCRIPTEN__)
+#include <emscripten.h>   /* EM_ASM, for keeping the pad bindings across reloads */
+#endif
+
 Game       g     = {0};
 InputState input = {0};
 
@@ -52,6 +56,186 @@ static void SaveHighScore(void)
     if (!f) return;
     fprintf(f, "%d\n", g.highScore);
     fclose(f);
+}
+
+/* --------------------------------------------------------------------------
+ *  Pad bindings
+ *
+ *  Which button shoots is a personal matter, so the pad is remappable and the
+ *  choice outlives the session: a small key=value file next to the executable
+ *  on the desktop, and the browser's own storage on the web. The keyboard is
+ *  deliberately not remappable - there are enough keys that the defaults are
+ *  never in the way, and a half-remapped keyboard is just somewhere to get
+ *  stuck.
+ * ----------------------------------------------------------------------- */
+Bindings binds;
+
+#define PAD_BUTTON_FIRST GAMEPAD_BUTTON_LEFT_FACE_UP
+#define PAD_BUTTON_MAX   (GAMEPAD_BUTTON_RIGHT_THUMB + 1)
+
+static const char *const kBindKeys[BIND_COUNT] = {
+    "fire", "boost", "recall", "special"
+};
+
+void BindsLoadDefaults(void)
+{
+    /* The trigger shoots, B boosts, X calls the wing and Y is the ultimate.
+       Nothing else on the pad fires: a stray face button should never start
+       a fight. */
+    binds.button[BIND_FIRE]    = GAMEPAD_BUTTON_RIGHT_TRIGGER_2;  /* RT    */
+    binds.button[BIND_BOOST]   = GAMEPAD_BUTTON_RIGHT_FACE_RIGHT; /* B     */
+    binds.button[BIND_RECALL]  = GAMEPAD_BUTTON_RIGHT_FACE_LEFT;  /* X     */
+    binds.button[BIND_SPECIAL] = GAMEPAD_BUTTON_RIGHT_FACE_UP;    /* Y     */
+}
+
+/* A human name for a pad button, for the controls panel. */
+const char *PadButtonName(int button)
+{
+    switch (button) {
+        case GAMEPAD_BUTTON_LEFT_FACE_UP:      return "D-UP";
+        case GAMEPAD_BUTTON_LEFT_FACE_RIGHT:   return "D-RIGHT";
+        case GAMEPAD_BUTTON_LEFT_FACE_DOWN:    return "D-DOWN";
+        case GAMEPAD_BUTTON_LEFT_FACE_LEFT:    return "D-LEFT";
+        case GAMEPAD_BUTTON_RIGHT_FACE_UP:     return "Y";
+        case GAMEPAD_BUTTON_RIGHT_FACE_RIGHT:  return "B";
+        case GAMEPAD_BUTTON_RIGHT_FACE_DOWN:   return "A";
+        case GAMEPAD_BUTTON_RIGHT_FACE_LEFT:   return "X";
+        case GAMEPAD_BUTTON_LEFT_TRIGGER_1:    return "LB";
+        case GAMEPAD_BUTTON_LEFT_TRIGGER_2:    return "LT";
+        case GAMEPAD_BUTTON_RIGHT_TRIGGER_1:   return "RB";
+        case GAMEPAD_BUTTON_RIGHT_TRIGGER_2:   return "RT";
+        case GAMEPAD_BUTTON_MIDDLE_LEFT:       return "BACK";
+        case GAMEPAD_BUTTON_MIDDLE:            return "GUIDE";
+        case GAMEPAD_BUTTON_MIDDLE_RIGHT:      return "START";
+        case GAMEPAD_BUTTON_LEFT_THUMB:        return "L3";
+        case GAMEPAD_BUTTON_RIGHT_THUMB:       return "R3";
+        default:                               return "?";
+    }
+}
+
+const char *BindName(int action)
+{
+    if (action < 0 || action >= BIND_COUNT) return "?";
+    return PadButtonName(binds.button[action]);
+}
+
+void BindsLoad(void)
+{
+    BindsLoadDefaults();
+
+    char blob[256] = { 0 };
+#if defined(__EMSCRIPTEN__)
+    EM_ASM({
+        var s = "";
+        try { s = window.localStorage.getItem("pixel_squadron_controls") || ""; }
+        catch (e) { s = ""; }
+        stringToUTF8(s, $0, $1);
+    }, blob, (int)sizeof blob);
+#else
+    FILE *f = fopen("pixel_squadron.cfg", "r");
+    if (!f) return;
+    size_t n = fread(blob, 1, sizeof blob - 1, f);
+    blob[n] = '\0';
+    fclose(f);
+#endif
+
+    for (int i = 0; i < BIND_COUNT; i++) {
+        char key[24];
+        snprintf(key, sizeof key, "%s=", kBindKeys[i]);
+
+        char *at = strstr(blob, key);
+        if (!at) continue;
+
+        /* The stored buttons are small positive ids; a lookup also keeps
+           anything else in the file from smuggling a bogus binding in. */
+        int v = atoi(at + strlen(key));
+        if (v > 0 && v < PAD_BUTTON_MAX) binds.button[i] = v;
+    }
+}
+
+void BindsSave(void)
+{
+    char blob[256];
+    int n = 0;
+
+    for (int i = 0; i < BIND_COUNT; i++) {
+        n += snprintf(blob + n, sizeof blob - n, "%s=%d\n",
+                      kBindKeys[i], binds.button[i]);
+    }
+
+#if defined(__EMSCRIPTEN__)
+    EM_ASM({
+        try { window.localStorage.setItem("pixel_squadron_controls", UTF8ToString($0)); }
+        catch (e) {}
+    }, blob);
+#else
+    FILE *f = fopen("pixel_squadron.cfg", "w");
+    if (!f) return;
+    fputs(blob, f);
+    fclose(f);
+#endif
+}
+
+/* --------------------------------------------------------------------------
+ *  The controls panel on the pause screen.
+ *  main.c owns the state, hud.c draws it.
+ * ----------------------------------------------------------------------- */
+static bool remapActive = false;
+static int  remapSel    = 0;
+static bool remapArmed  = false;
+
+bool RemapActive(void)    { return remapActive; }
+int  RemapSelection(void) { return remapSel; }
+bool RemapArmed(void)     { return remapArmed; }
+
+/* Which buttons may be bound. Start is the pause button and the guide button
+   belongs to the console, so neither is offered. */
+static bool BindableButton(int b)
+{
+    return b >= PAD_BUTTON_FIRST && b < PAD_BUTTON_MAX &&
+           b != GAMEPAD_BUTTON_MIDDLE_RIGHT && b != GAMEPAD_BUTTON_MIDDLE;
+}
+
+/* Returns true while the panel is up, so the caller knows the pause key was
+   spent on it rather than on resuming. */
+static bool RemapPanelKeys(void)
+{
+    if (remapArmed) {
+        for (int b = PAD_BUTTON_FIRST; b < PAD_BUTTON_MAX; b++) {
+            if (!BindableButton(b)) continue;
+            if (IsGamepadButtonPressed(0, b)) {
+                binds.button[remapSel] = b;
+                BindsSave();
+                remapArmed = false;
+                break;
+            }
+        }
+        if (IsKeyPressed(KEY_ESCAPE)) remapArmed = false;
+        return true;
+    }
+
+    if (IsKeyPressed(KEY_W) || IsKeyPressed(KEY_UP) ||
+        IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_FACE_UP)) {
+        remapSel = (remapSel + BIND_COUNT - 1) % BIND_COUNT;
+    }
+    if (IsKeyPressed(KEY_S) || IsKeyPressed(KEY_DOWN) ||
+        IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_FACE_DOWN)) {
+        remapSel = (remapSel + 1) % BIND_COUNT;
+    }
+    if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE) ||
+        IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_FACE_DOWN)) {
+        remapArmed = true;
+    }
+    if (IsKeyPressed(KEY_R)) {   /* back to how it shipped */
+        BindsLoadDefaults();
+        BindsSave();
+    }
+    if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_C)) {
+        remapActive = false;
+        BindsSave();
+    }
+
+    return true;
 }
 
 /* --------------------------------------------------------------------------
@@ -136,58 +320,83 @@ static void GatherInput(void)
     if (IsKeyDown(KEY_W) || IsKeyDown(KEY_UP))    move.y -= 1.0f;
     if (IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN))  move.y += 1.0f;
 
-    bool    firing   = IsMouseButtonDown(MOUSE_BUTTON_LEFT) || IsKeyDown(KEY_SPACE);
-    bool    boosting = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
-    bool    gamepad  = false;
-    Vector2 aim      = V2(0, 0);
+    Vector2 mouseVirtual = ScreenToVirtual(GetMousePosition());
 
-    /* --- Xbox pad: left stick flies, right stick shoots, triggers fire -----
-       Left stick moves, right stick aims and opens up, RT/RB fire, LT/Y burn
-       the boost, LB (or the bottom of the D-pad) calls the wing home and
-       Start pauses. Everything the keyboard can do is on the pad too. */
+    bool firing  = IsMouseButtonDown(MOUSE_BUTTON_LEFT) || IsKeyDown(KEY_SPACE);
+    bool boosting = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
+    bool rally    = IsKeyPressed(KEY_Q);
+    bool special  = IsKeyPressed(KEY_E);
+    bool padAim   = false;
+    Vector2 aim   = V2(0, 0);
+
+    /* --- Xbox pad: left stick flies, right stick shoots, shoulders act -----
+       Left stick moves, right stick aims and opens up, the trigger the player
+       bound to FIRE shoots, BOOST burns, RECALL brings the wing home and
+       SPECIAL fires the ultimate. Nothing else on the pad shoots - a stray
+       bumper should never start a fight. */
     if (IsGamepadAvailable(0)) {
         Vector2 ls = V2(GetGamepadAxisMovement(0, GAMEPAD_AXIS_LEFT_X),
                         GetGamepadAxisMovement(0, GAMEPAD_AXIS_LEFT_Y));
         Vector2 rs = V2(GetGamepadAxisMovement(0, GAMEPAD_AXIS_RIGHT_X),
                         GetGamepadAxisMovement(0, GAMEPAD_AXIS_RIGHT_Y));
 
-        if (V2Len(ls) > 0.22f) { move = ls; gamepad = true; }
+        if (V2Len(ls) > 0.22f) move = ls;
 
         if (V2Len(rs) > 0.28f) {
-            aim     = V2Norm(rs);
-            firing  = true;
-            gamepad = true;
-        }
-        if (IsGamepadButtonDown(0, GAMEPAD_BUTTON_RIGHT_TRIGGER_2) ||
-            IsGamepadButtonDown(0, GAMEPAD_BUTTON_RIGHT_TRIGGER_1)) {
-            firing  = true;
-            gamepad = true;
+            aim    = V2Norm(rs);
+            firing = true;
+            padAim = true;
         }
 
-        /* boost: left trigger, either as a digital button or as an axis */
-        if (IsGamepadButtonDown(0, GAMEPAD_BUTTON_LEFT_TRIGGER_2) ||
-            IsGamepadButtonDown(0, GAMEPAD_BUTTON_RIGHT_FACE_UP) ||
+        if (IsGamepadButtonDown(0, binds.button[BIND_FIRE]))  firing   = true;
+        if (IsGamepadButtonDown(0, binds.button[BIND_BOOST])) boosting = true;
+        if (IsGamepadButtonDown(0, GAMEPAD_BUTTON_LEFT_TRIGGER_1) ||
             GetGamepadAxisMovement(0, GAMEPAD_AXIS_LEFT_TRIGGER) > 0.45f) {
-            boosting = true;
+            boosting = true;   /* the left trigger stays a boost whatever
+                                  the right one is bound to */
         }
+        if (IsGamepadButtonPressed(0, binds.button[BIND_RECALL]))  rally   = true;
+        if (IsGamepadButtonPressed(0, binds.button[BIND_SPECIAL])) special = true;
     }
 
-    Vector2 mouseVirtual = ScreenToVirtual(GetMousePosition());
+    /* --- which hand is driving? ------------------------------------------
+       The mouse keeps the crosshair unless the right stick is actually being
+       pushed. A resting stick - or a worn one that never quite centres - must
+       not steal the aim from the hand that is holding the mouse, so the two
+       never fight over it. The choice is sticky, so the reticle does not flick
+       between input devices from frame to frame. */
+    static bool    padMode   = false;
+    static Vector2 lastMouse = { -1.0f, -1.0f };
 
-    if (!gamepad) {
+    if (padAim) padMode = true;
+    if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) padMode = false;
+
+    if (lastMouse.x >= 0.0f &&
+        (fabsf(mouseVirtual.x - lastMouse.x) > 0.5f ||
+         fabsf(mouseVirtual.y - lastMouse.y) > 0.5f)) {
+        padMode = false;
+    }
+    lastMouse = mouseVirtual;
+
+    if (!padAim) {
         Vector2 mouseWorld = GetScreenToWorld2D(mouseVirtual, camera);
         Vector2 toMouse    = V2Sub(mouseWorld, g.player.pos);
         if (V2Len(toMouse) > 1.0f) aim = V2Norm(toMouse);
     }
 
+    /* A tapped button can go down and up between two frames. A press always
+       buys a short burst of fire, so a quick click never does nothing. */
+    static float fireLatch = 0.0f;
+    if (firing) fireLatch = 0.10f;
+    else if (fireLatch > 0.0f) fireLatch -= GetFrameTime();
+
     input.move         = move;
     input.aim          = aim;
-    input.firing       = firing;
+    input.firing       = firing || fireLatch > 0.0f;
     input.boost        = boosting;
-    input.rally        = IsKeyPressed(KEY_Q) ||
-                         IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_TRIGGER_1) ||
-                         IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_FACE_DOWN);
-    input.usingGamepad = gamepad;
+    input.rally        = rally;
+    input.special      = special;
+    input.usingGamepad = padMode;
     input.reticle      = mouseVirtual;
 }
 
@@ -225,8 +434,10 @@ static void AutoPilotInput(float dt)
     /* let the demo show off the boost every few seconds */
     input.boost  = fmodf(g.autoPilotTime, 7.0f) < 4.0f;
     /* ...and call the wing back once a lap, so the recall gets exercised */
-    input.rally  = fmodf(g.autoPilotTime, 11.0f) < 0.02f;
-    input.usingGamepad = true;   /* suppresses the mouse reticle */
+    input.rally  = fmodf(g.autoPilotTime, 3.5f) < 0.02f;
+    /* fire the ultimate once a lap too */
+    input.special = fmodf(g.autoPilotTime, 4.0f) < 0.02f;
+    input.usingGamepad = true;   /* the reticle rides the aim, not the mouse */
     input.reticle = V2(RENDER_W * 0.5f, RENDER_H * 0.5f);
 }
 
@@ -324,15 +535,19 @@ static void UpdatePlaying(float dt)
 
     /* The recall is a player order, so it is read before the wing thinks. */
     if (input.rally && g.player.alive) AlliesRally();
+    if (input.special && g.player.alive) PlayerSpecial();
 
     PlayerUpdate(step);
     EnemiesUpdate(step);
+    FieldUpdate(step);
     AlliesUpdate(step);
     BulletsUpdate(step);
     PickupsUpdate(step);
     ParticlesUpdate(step);
     BurstsUpdate(step);
     PopupsUpdate(step);
+
+    if (g.levelUpFlash > 0.0f) g.levelUpFlash -= dt;
 
     if (g.player.alive) {
         if (g.wavePending > 0) {
@@ -378,6 +593,7 @@ static void DrawWorld(void)
     PickupsDraw();
     BulletsDraw();
     EnemiesDraw();
+    FieldDraw();          /* JUNO's dome sits over the fight, under the ships */
     AlliesDraw();
     PlayerDraw();
     RallyDraw();
@@ -560,6 +776,12 @@ static void HandleGlobalKeys(void)
             break;
 
         case STATE_PAUSED:
+            /* The controls panel takes the whole pause keymap while it is up,
+               so Escape means "close the panel", not "resume". */
+            if (remapActive) { RemapPanelKeys(); break; }
+
+            if (IsKeyPressed(KEY_C)) { remapActive = true; remapArmed = false; break; }
+
             if (IsKeyPressed(KEY_P) || IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_ENTER) ||
                 IsGamepadButtonPressed(0, GAMEPAD_BUTTON_MIDDLE_RIGHT)) {
                 g.state = STATE_PLAY;
@@ -589,6 +811,7 @@ int main(int argc, char **argv)
     bool endCard = false;
     bool titleCard = false;
     int  forceBiome = -1;
+    int  wingUp = -1;
 #if !defined(__EMSCRIPTEN__)
     int startFlags = START_CENTER | START_FULLSCREEN;   /* play big by default */
 #endif
@@ -611,6 +834,8 @@ int main(int argc, char **argv)
             titleCard = true;    /* dev: screenshot the title card */
         } else if (strcmp(argv[i], "--biome") == 0 && i + 1 < argc) {
             forceBiome = atoi(argv[++i]);   /* dev: pin the world to one biome */
+        } else if (strcmp(argv[i], "--wingup") == 0 && i + 1 < argc) {
+            wingUp = atoi(argv[++i]);       /* dev: show the wing rearm banner */
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             printf("Pixel Squadron\n"
                    "  --seed N          start from a specific terrain seed\n"
@@ -620,6 +845,7 @@ int main(int argc, char **argv)
                    "                                 2 frost, 3 ash, 4 verge)\n"
                    "  --endcard         dev: jump straight to the end-of-run report\n"
                    "  --titlecard       dev: screenshot the title card and quit\n"
+                   "  --wingup N        dev: show the wing's rearm banner at level N\n"
                    "  --windowed        start in a window (default is fullscreen)\n"
                    "  --fullscreen      force fullscreen\n"
                    "\n"
@@ -664,6 +890,7 @@ int main(int argc, char **argv)
     ArenaForceBiome(forceBiome);   /* no-op unless --biome was passed */
 
     LoadHighScore();
+    BindsLoad();
     AssetsLoad();
 
     camera = (Camera2D){
@@ -697,6 +924,12 @@ int main(int argc, char **argv)
     }
 
     if (demoSeconds > 0.0f) g.autoPilot = true;
+
+    /* Dev aid: hold the wing-rearm banner on screen so it can be eyeballed. */
+    if (wingUp >= 0) {
+        g.allyLevel    = wingUp;
+        g.levelUpFlash = 2.5f;
+    }
 
     /* Dev aid: sit on the title card, screenshot it and quit. */
     if (titleCard) {
@@ -750,6 +983,9 @@ int main(int argc, char **argv)
             UpdatePlaying(dt);
             ChatUpdate(dt);
         }
+
+        /* Dev aid: keep the wing-rearm banner pinned open for a screenshot. */
+        if (wingUp >= 0) g.levelUpFlash = 2.5f;
 
         /* looping engine hum, louder the faster we fly */
         if (!muted && g.state == STATE_PLAY && g.player.alive) {

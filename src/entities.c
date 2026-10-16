@@ -21,9 +21,7 @@
 #define PLAYER_BULLET_SPD 320.0f
 #define PLAYER_BULLET_DMG 1.0f
 
-#define POWER_DURATION    10.0f   /* seconds of the rapid-fire buff  */
 #define HIT_INVULN        0.80f   /* i-frames granted after a hit    */
-#define SHIELD_DURATION   6.0f
 
 /* Wingmen */
 #define ALLY_MAX_HP       70.0f
@@ -347,6 +345,9 @@ void EntitiesReset(void)
     g.rallyCool  = 0.0f;
     g.rallyTimer = 0.0f;
     g.crits      = 0;
+    g.allyLevel  = 0;
+    g.levelUpFlash = 0.0f;
+    g.field      = (AegisField){ 0 };
     for (int i = 0; i < MAX_ALLIES; i++) g.allyKills[i] = 0;
 
     /* Start over the most land-rich part of whatever the arena generator just
@@ -406,6 +407,184 @@ void PlayerDamage(float amount)
     PlaySfx(assets.explosionBig, 0.9f, 1.0f);
 }
 
+/* A weapon crate, picked at random. Used by the supply drops and by JUNO's
+   dome, both of which want to hand out something the player will notice. */
+static PickupKind RandomWeaponCrate(void)
+{
+    switch (GetRandomValue(0, 2)) {
+        case 0:  return PICK_QUAD;
+        case 1:  return PICK_SPREAD;
+        default: return PICK_HOMING;
+    }
+}
+
+/* --------------------------------------------------------------------------
+ *  The player's ultimate
+ *
+ *  Everything in reach gets shoved and shredded, every enemy round nearby is
+ *  wiped out of the air, and the player is untouchable for a beat. It is the
+ *  answer to being boxed in, and it is on a long enough leash that it cannot
+ *  be the answer to everything else as well.
+ * ----------------------------------------------------------------------- */
+void PlayerSpecial(void)
+{
+    Player *p = &g.player;
+    if (!p->alive || p->specialTimer > 0.0f) return;
+
+    p->specialTimer = SPECIAL_COOLDOWN;
+    p->shieldTimer  = fmaxf(p->shieldTimer, SPECIAL_SHIELD);
+
+    Vector2 at = p->pos;
+
+    for (int i = 0; i < MAX_ENEMIES; i++) {
+        Enemy *e = &g.enemies[i];
+        if (!e->alive || e->spawnFade > 0.0f) continue;
+
+        float d = Dist2(e->pos, at);
+        if (d > SPECIAL_RADIUS * SPECIAL_RADIUS) continue;
+
+        Vector2 push = V2Sub(e->pos, at);
+        float   len  = V2Len(push);
+        Vector2 n    = (len > 0.001f) ? V2Scale(push, 1.0f / len) : V2(1.0f, 0.0f);
+
+        e->vel = V2Add(e->vel, V2Scale(n, 340.0f));
+        DamageEnemy(e, SPECIAL_DAMAGE * (1.0f - 0.6f * (len / SPECIAL_RADIUS)));
+    }
+
+    /* sweep the enemy fire out of the air */
+    float sweep = SPECIAL_RADIUS * 1.2f;
+    for (int i = 0; i < MAX_BULLETS; i++) {
+        Bullet *b = &g.bullets[i];
+        if (!b->alive || b->owner == BULLET_PLAYER || b->owner == BULLET_ALLY) continue;
+        if (Dist2(b->pos, at) > sweep * sweep) continue;
+
+        b->alive = false;
+        SpawnBurstParticles(b->pos, 0.22f, COL_SHALLOW);
+    }
+
+    SpawnBurst(at, 2.6f);
+    SpawnBurstParticles(at, 2.4f, COL_SHALLOW);
+    g.shake   = fmaxf(g.shake, 14.0f);
+    g.hitStop = fmaxf(g.hitStop, 0.05f);
+
+    TextCopy(g.message, "OVERSURGE");
+    g.messageTimer = 1.6f;
+    PlaySfx(assets.explosionBig, 0.55f, 0.72f);
+}
+
+/* --------------------------------------------------------------------------
+ *  JUNO's dome
+ *
+ *  A bubble of quiet in the middle of the fight: enemies get shoved out of it,
+ *  their fire comes apart on the shell, everyone standing inside gets patched
+ *  up, and it pays out a weapon crate on its way through. It rides with JUNO,
+ *  so wherever the squadron goes the bubble covers them.
+ * ----------------------------------------------------------------------- */
+void FieldCast(Ally *caster)
+{
+    g.field = (AegisField){
+        .alive   = true,
+        .pos     = caster ? caster->pos : g.player.pos,
+        .life    = FIELD_LIFE,
+        .radius  = FIELD_RADIUS,
+        .pulse   = 0.0f,
+        .dropped = false,
+    };
+
+    SpawnBurst(g.field.pos, 2.2f);
+    SpawnBurstParticles(g.field.pos, 1.6f, COL_HEAL);
+    PlaySfx(assets.shield, 0.5f, 0.9f);
+}
+
+void FieldUpdate(float dt)
+{
+    AegisField *f = &g.field;
+    if (!f->alive) return;
+
+    f->life  -= dt;
+    f->pulse += dt;
+
+    for (int i = 0; i < MAX_ALLIES; i++) {
+        Ally *a = &g.allies[i];
+        if (a->alive && a->role == ALLY_JUNO) { f->pos = a->pos; break; }
+    }
+
+    if (f->life <= 0.0f) {
+        f->alive = false;
+        SpawnBurstParticles(f->pos, 1.0f, COL_HEAL);
+        return;
+    }
+
+    float r2 = f->radius * f->radius;
+
+    for (int i = 0; i < MAX_ENEMIES; i++) {
+        Enemy *e = &g.enemies[i];
+        if (!e->alive || e->spawnFade > 0.0f) continue;
+        if (Dist2(e->pos, f->pos) > r2) continue;
+
+        Vector2 push = V2Sub(e->pos, f->pos);
+        float   len  = V2Len(push);
+        Vector2 n    = (len > 0.001f) ? V2Scale(push, 1.0f / len) : V2(1.0f, 0.0f);
+
+        /* shove them out along the radius and keep shoving while they are in,
+           so nothing can sit inside the bubble and shoot */
+        e->vel = V2Add(e->vel, V2Scale(n, FIELD_SHOVE * dt * 8.0f));
+        DamageEnemy(e, 13.0f * dt);
+    }
+
+    for (int i = 0; i < MAX_BULLETS; i++) {
+        Bullet *b = &g.bullets[i];
+        if (!b->alive || b->owner == BULLET_PLAYER || b->owner == BULLET_ALLY) continue;
+        if (Dist2(b->pos, f->pos) > r2) continue;
+
+        b->alive = false;
+        SpawnBurstParticles(b->pos, 0.22f, COL_HEAL);
+    }
+
+    if (g.player.alive && Dist2(g.player.pos, f->pos) <= r2) {
+        g.player.hp = fminf(PLAYER_MAX_HP, g.player.hp + FIELD_HEAL * dt);
+    }
+    for (int i = 0; i < MAX_ALLIES; i++) {
+        Ally *a = &g.allies[i];
+        if (!a->alive || Dist2(a->pos, f->pos) > r2) continue;
+        a->hp = fminf(a->maxHp, a->hp + FIELD_HEAL * dt);
+    }
+
+    /* half way through, it hands out a crate - standing in the bubble pays */
+    if (!f->dropped && f->life < FIELD_LIFE * 0.5f) {
+        f->dropped = true;
+        SpawnPickup(RandomWeaponCrate(), f->pos);
+    }
+}
+
+void FieldDraw(void)
+{
+    AegisField *f = &g.field;
+    if (!f->alive) return;
+
+    /* it pops open fast and closes slowly, so the shell reads as a swell */
+    float life = f->life / FIELD_LIFE;
+    float open = fminf(1.0f, (1.0f - life) * 7.0f);
+    float shut = fminf(1.0f, life * 4.0f);
+    float k    = fminf(open, shut);
+    float r    = f->radius * (0.70f + 0.30f * k);
+
+    for (int i = 6; i >= 1; i--) {
+        float rr = r * (float)i / 6.0f;
+        DrawCircleV(f->pos, rr, (Color){ 140, 245, 170, (unsigned char)(15 * k) });
+    }
+    DrawCircleLinesV(f->pos, r,         (Color){ 140, 245, 170, (unsigned char)(235 * k) });
+    DrawCircleLinesV(f->pos, r * 0.93f, (Color){ 223, 246, 245, (unsigned char)(165 * k) });
+
+    /* a slow band sweeping round the shell, so it reads as machinery */
+    float a = f->pulse * 2.2f;
+    for (int i = 0; i < 6; i++) {
+        float ang = a + (float)i * (PI / 3.0f);
+        Vector2 at = V2Add(f->pos, V2(cosf(ang) * r, sinf(ang) * r));
+        DrawCircleV(at, 2.5f, (Color){ 223, 246, 245, (unsigned char)(230 * k) });
+    }
+}
+
 static void PlayerShoot(void)
 {
     Player *p = &g.player;
@@ -416,7 +595,36 @@ static void PlayerShoot(void)
     Vector2 perp   = V2(-dir.y, dir.x);
     Vector2 muzzle = V2Add(p->pos, V2Scale(dir, 12.0f));
 
-    switch (p->weaponLevel) {
+    /* --- the weapon crates, in order of how loudly they shout -------------
+       A crate does not upgrade the gun, it *replaces* it for a few seconds:
+       the point is that the player can feel the difference immediately. */
+    if (p->quadTimer > 0.0f) {
+        for (int i = -1; i <= 1; i += 2) {
+            for (int k = -1; k <= 1; k += 2) {
+                float ang = p->angle + (float)k * 7.0f * DEG2RAD;
+                Vector2 d = V2(cosf(ang), sinf(ang));
+                SpawnBullet(V2Add(V2Add(muzzle, V2Scale(perp, 5.0f * (float)i)),
+                                  V2Scale(d, 3.0f)),
+                            V2Scale(d, PLAYER_BULLET_SPD), TILE_BOLT,
+                            damage * 0.90f, 1.2f, 0.95f, BULLET_PLAYER, -1);
+            }
+        }
+    } else if (p->spreadTimer > 0.0f) {
+        for (int i = -3; i <= 3; i++) {
+            float ang = p->angle + (float)i * 8.5f * DEG2RAD;
+            Vector2 d = V2(cosf(ang), sinf(ang));
+            SpawnBullet(V2Add(muzzle, V2Scale(d, 3.0f)),
+                        V2Scale(d, PLAYER_BULLET_SPD * 0.94f), TILE_BOLT,
+                        damage * 0.60f, 0.66f, 0.85f, BULLET_PLAYER, -1);
+        }
+    } else if (p->homingTimer > 0.0f) {
+        for (int i = -1; i <= 1; i += 2) {
+            Bullet *b = SpawnBullet(V2Add(muzzle, V2Scale(perp, 6.0f * (float)i)),
+                                    V2Scale(dir, PLAYER_BULLET_SPD * 0.70f), TILE_BOLT,
+                                    damage * 1.30f, 2.4f, 1.15f, BULLET_PLAYER, -1);
+            if (b) b->homing = 3.4f;
+        }
+    } else switch (p->weaponLevel) {
         case 1:
             SpawnBullet(muzzle, V2Scale(dir, PLAYER_BULLET_SPD),
                         TILE_BOLT, damage, 1.3f, 1.0f, BULLET_PLAYER, -1);
@@ -533,13 +741,25 @@ void PlayerUpdate(float dt)
     }
 
     /* --- timers and weapons ------------------------------------------ */
-    if (p->powerTimer  > 0.0f) p->powerTimer  -= dt;
-    if (p->shieldTimer > 0.0f) p->shieldTimer -= dt;
-    if (p->hitFlash    > 0.0f) p->hitFlash    -= dt * 4.0f;
+    if (p->powerTimer   > 0.0f) p->powerTimer   -= dt;
+    if (p->shieldTimer  > 0.0f) p->shieldTimer  -= dt;
+    if (p->quadTimer    > 0.0f) p->quadTimer    -= dt;
+    if (p->spreadTimer  > 0.0f) p->spreadTimer  -= dt;
+    if (p->homingTimer  > 0.0f) p->homingTimer  -= dt;
+    if (p->specialTimer > 0.0f) p->specialTimer -= dt;
+    if (p->hitFlash     > 0.0f) p->hitFlash     -= dt * 4.0f;
+
+    /* Crates that throw more lead get a slightly longer beat between shots,
+       so every gun stays roughly as strong as the one before it. */
+    float cycle = PLAYER_FIRE_TIME;
+    if (p->quadTimer   > 0.0f) cycle *= 1.45f;
+    if (p->spreadTimer > 0.0f) cycle *= 1.60f;
+    if (p->homingTimer > 0.0f) cycle *= 1.30f;
+    if (p->powerTimer  > 0.0f) cycle *= 0.62f;
 
     p->fireTimer -= dt;
     if (input.firing && p->fireTimer <= 0.0f) {
-        p->fireTimer = PLAYER_FIRE_TIME * ((p->powerTimer > 0.0f) ? 0.62f : 1.0f);
+        p->fireTimer = cycle;
         PlayerShoot();
     }
 }
@@ -600,7 +820,7 @@ void DamageEnemy(Enemy *e, float amount)
         SpawnBurstParticles(e->pos, 0.9f, (Color){ 140, 235, 150, 255 });
     }
 
-    /* Loot table. */
+    /* Loot table. The heavy stuff drops the interesting crates. */
     int  roll   = GetRandomValue(0, 99);
     int  chance = (e->kind == ENEMY_HEAVY)    ? 70
                 : (e->kind == ENEMY_TENDER)   ? 60
@@ -608,11 +828,15 @@ void DamageEnemy(Enemy *e, float amount)
                 : (e->kind == ENEMY_LANCER)   ? 28
                 : (e->kind == ENEMY_RAIDER)   ? 12
                                               : 10;
-    PickupKind kind = (e->kind == ENEMY_HEAVY)  ? PICK_POWER
-                    : (e->kind == ENEMY_TENDER) ? PICK_SHIELD
-                    : (e->kind == ENEMY_RAIDER ||
-                       e->kind == ENEMY_LANCER) ? PICK_SHIELD
-                                                : PICK_HEALTH;
+    PickupKind kind;
+    if (e->kind == ENEMY_HEAVY || e->kind == ENEMY_LANCER) {
+        /* gunships carry guns */
+        kind = (GetRandomValue(0, 2) == 0) ? RandomWeaponCrate() : PICK_POWER;
+    } else if (e->kind == ENEMY_TENDER || e->kind == ENEMY_RAIDER) {
+        kind = PICK_SHIELD;
+    } else {
+        kind = (GetRandomValue(0, 5) == 0) ? RandomWeaponCrate() : PICK_HEALTH;
+    }
 
     if (roll < chance) SpawnPickup(kind, e->pos);
 }
@@ -977,13 +1201,20 @@ static int EnemiesNear(Vector2 from, float radius)
 
 /* Does this crate offer something the wingman actually needs? A hurt pilot
    wants the repair; one flying with nothing running will still take a weapon
-   or a shield, because that is what keeps them alive out here. */
+   or a shield, because that is what keeps them alive out here. They are eager
+   about it: a wingman flying bare will cross a third of the arena for a gun. */
 static bool AllyWantsPickup(const Ally *a, const Pickup *p)
 {
     switch (p->kind) {
-        case PICK_HEALTH: return a->hp < a->maxHp * 0.62f;
-        case PICK_POWER:  return a->powerTimer  <= 0.0f;
+        case PICK_HEALTH: return a->hp < a->maxHp * 0.85f;
+        case PICK_POWER:
+        case PICK_QUAD:
+        case PICK_SPREAD:
+        case PICK_HOMING:
+            return a->powerTimer <= 0.0f && a->quadTimer <= 0.0f &&
+                   a->spreadTimer <= 0.0f && a->homingTimer <= 0.0f;
         case PICK_SHIELD: return a->shieldTimer <= 0.0f;
+        default: break;
     }
     return false;
 }
@@ -1079,9 +1310,10 @@ void AllyDamage(Ally *a, float amount)
  * ----------------------------------------------------------------------- */
 #define ALLY_KILL_STEP 0.010f   /* +1% (of the wing's total) per kill     */
 #define ALLY_KILL_CAP  0.75f    /* ...up to +75% from kills alone         */
-#define ALLY_VET_STEP  0.06f    /* +6% every five waves                   */
+#define ALLY_VET_STEP  0.055f   /* +5.5% every two waves                  */
 #define ALLY_VET_CAP   2.20f    /* however long you last, this is the end */
 #define ALLY_SPEED_CAP 1.30f    /* they still have to fly with the player */
+#define ALLY_VET_WAVES 2        /* how often the wing is rearmed          */
 
 static int AllyKills(void)
 {
@@ -1094,7 +1326,7 @@ static int AllyKills(void)
 static float AllyVet(void)
 {
     float kills = fminf((float)AllyKills() * ALLY_KILL_STEP, ALLY_KILL_CAP);
-    float waves = (float)(g.wave / 5) * ALLY_VET_STEP;
+    float waves = (float)(g.wave / ALLY_VET_WAVES) * ALLY_VET_STEP;
 
     return fminf(1.0f + kills + waves, ALLY_VET_CAP);
 }
@@ -1118,10 +1350,13 @@ static void AllyRefreshRank(Ally *a)
 }
 
 /* Called at the top of every wave: everyone is patched up to the new ceiling,
-   so being rearmed reads as a reward rather than a free full heal. */
+   so being rearmed reads as a reward rather than a free full heal. Every other
+   wave is a proper rearm, and that one is announced - the player should be able
+   to see why the wing suddenly stopped melting. */
 void AlliesUpgrade(void)
 {
     float maxHp = AllyMaxHpForRank();
+    int   level = (g.wave / ALLY_VET_WAVES);
 
     for (int i = 0; i < MAX_ALLIES; i++) {
         Ally *a = &g.allies[i];
@@ -1130,6 +1365,17 @@ void AlliesUpgrade(void)
 
         a->maxHp = maxHp;
         if (a->alive) a->hp = fminf(maxHp, a->hp + gain + 8.0f);
+    }
+
+    if (level > g.allyLevel) {
+        g.allyLevel    = level;
+        g.levelUpFlash = 3.0f;
+
+        /* the chat line below uses g.message, so only shout over it on the
+           wave where the wing actually gets better */
+        snprintf(g.message, sizeof g.message, "WINGMEN LEVEL %d", level + 1);
+        g.messageTimer = 2.4f;
+        PlaySfx(assets.shield, 0.30f, 1.25f);
     }
 }
 
@@ -1189,12 +1435,46 @@ static void AllyShoot(Ally *a)
 {
     const AllyProfile *pr = AllyProfileOf(a->role);
     Vector2 dir    = V2(cosf(a->angle), sinf(a->angle));
+    Vector2 side   = V2(-dir.y, dir.x);
     Vector2 muzzle = V2Add(a->pos, V2Scale(dir, 11.0f));
 
-    SpawnBullet(muzzle, V2Scale(dir, ALLY_BULLET_SPD), TILE_BOLT,
-                ALLY_BULLET_DMG * AllyGunMul(a), 1.3f, 1.0f, BULLET_ALLY, a->slot);
-    SpawnBurstParticles(muzzle, 0.18f, pr->hull);
+    /* A wingman carrying a weapon crate shoots the same gun the player does -
+       the crate is worth grabbing *because* you can see it working. */
+    if (a->quadTimer > 0.0f) {
+        for (int i = -1; i <= 1; i += 2) {
+            for (int k = -1; k <= 1; k += 2) {
+                float ang = a->angle + (float)k * 7.0f * DEG2RAD;
+                Vector2 d = V2(cosf(ang), sinf(ang));
+                SpawnBullet(V2Add(V2Add(muzzle, V2Scale(side, 4.0f * (float)i)),
+                                  V2Scale(d, 2.0f)),
+                            V2Scale(d, ALLY_BULLET_SPD), TILE_BOLT,
+                            ALLY_BULLET_DMG * 0.72f * AllyGunMul(a), 1.1f, 0.9f,
+                            BULLET_ALLY, a->slot);
+            }
+        }
+    } else if (a->spreadTimer > 0.0f) {
+        for (int i = -2; i <= 2; i++) {
+            float ang = a->angle + (float)i * 9.0f * DEG2RAD;
+            Vector2 d = V2(cosf(ang), sinf(ang));
+            SpawnBullet(V2Add(muzzle, V2Scale(d, 2.0f)),
+                        V2Scale(d, ALLY_BULLET_SPD * 0.95f), TILE_BOLT,
+                        ALLY_BULLET_DMG * 0.58f * AllyGunMul(a), 0.62f, 0.85f,
+                        BULLET_ALLY, a->slot);
+        }
+    } else if (a->homingTimer > 0.0f) {
+        for (int i = -1; i <= 1; i += 2) {
+            Bullet *b = SpawnBullet(V2Add(muzzle, V2Scale(side, 5.0f * (float)i)),
+                                    V2Scale(dir, ALLY_BULLET_SPD * 0.7f), TILE_BOLT,
+                                    ALLY_BULLET_DMG * 1.3f * AllyGunMul(a), 2.4f, 1.1f,
+                                    BULLET_ALLY, a->slot);
+            if (b) b->homing = 3.2f;
+        }
+    } else {
+        SpawnBullet(muzzle, V2Scale(dir, ALLY_BULLET_SPD), TILE_BOLT,
+                    ALLY_BULLET_DMG * AllyGunMul(a), 1.3f, 1.0f, BULLET_ALLY, a->slot);
+    }
 
+    SpawnBurstParticles(muzzle, 0.18f, pr->hull);
     PlaySfx(assets.shoot, 0.10f, 1.35f);
 }
 
@@ -1227,32 +1507,14 @@ void AllySpecial(Ally *a)
         }
 
         /* --------------------------------------------------------- JUNO ----
-           A repair field for everyone nearby, plus a heavy twin shot. */
+           The dome: a bubble of quiet that shoves enemies out, eats their
+           fire, patches up everyone inside and hands out a gun. Plus the
+           heavy twin shot she always had. */
         case ALLY_JUNO: {
-            float r2 = 165.0f * 165.0f;
-            bool  healed = false;
+            FieldCast(a);
 
-            if (g.player.alive && g.player.hp < PLAYER_MAX_HP &&
-                Dist2(g.player.pos, a->pos) < r2) {
-                g.player.hp = fminf(PLAYER_MAX_HP, g.player.hp + 24.0f);
-                SpawnBurstParticles(g.player.pos, 0.55f, COL_HEAL);
-                healed = true;
-            }
-
-            for (int i = 0; i < MAX_ALLIES; i++) {
-                Ally *o = &g.allies[i];
-                if (!o->alive || o == a) continue;
-                if (o->hp >= o->maxHp || Dist2(o->pos, a->pos) > r2) continue;
-
-                o->hp = fminf(o->maxHp, o->hp + 24.0f);
-                SpawnBurstParticles(o->pos, 0.55f, COL_HEAL);
-                healed = true;
-            }
-
-            if (healed) {
-                TextCopy(g.message, "AEGIS FIELD");
-                g.messageTimer = 1.0f;
-            }
+            TextCopy(g.message, "AEGIS FIELD");
+            g.messageTimer = 1.4f;
 
             for (int i = -1; i <= 1; i += 2) {
                 Vector2 from = V2Add(V2Add(a->pos, V2Scale(dir, 9.0f)),
@@ -1338,6 +1600,9 @@ void AlliesUpdate(float dt)
         if (a->rallyTimer > 0.0f) a->rallyTimer -= dt;
         if (a->powerTimer  > 0.0f) a->powerTimer  -= dt;
         if (a->shieldTimer > 0.0f) a->shieldTimer -= dt;
+        if (a->quadTimer   > 0.0f) a->quadTimer   -= dt;
+        if (a->spreadTimer > 0.0f) a->spreadTimer -= dt;
+        if (a->homingTimer > 0.0f) a->homingTimer -= dt;
 
         if (a->distress > 0.0f) {
             a->distress -= dt;
@@ -1452,6 +1717,13 @@ void AlliesUpdate(float dt)
             Vector2 toSlot = V2Sub(home, a->pos);
             float   d      = V2Len(toSlot);
             desiredVel = V2Scale(V2Norm(toSlot), fminf(d * 3.2f, maxSpeed));
+        } else if (loot && V2Len(V2Sub(loot->pos, a->pos)) < ALLY_CRATE_RUSH) {
+            /* A crate worth having, close enough to beat the enemy to. They go
+               straight for it and keep the guns on whatever is in front of
+               them on the way, so "shopping" never means "unarmed". */
+            Vector2 toLoot = V2Sub(loot->pos, a->pos);
+            float   d      = V2Len(toLoot);
+            desiredVel = V2Scale(V2Norm(toLoot), fminf(d * 3.0f, maxSpeed));
         } else if (target) {
             Vector2 toTarget = V2Sub(target->pos, a->pos);
             float   d        = V2Len(toTarget);
@@ -1549,7 +1821,10 @@ void AlliesUpdate(float dt)
                 float range = V2Len(V2Sub(target->pos, a->pos));
 
                 /* a weapon crate makes them shoot faster and hit harder */
-                float hot = (a->powerTimer > 0.0f) ? 0.66f : 1.0f;
+                float hot = (a->powerTimer  > 0.0f ||
+                             a->quadTimer   > 0.0f ||
+                             a->spreadTimer > 0.0f ||
+                             a->homingTimer > 0.0f) ? 0.66f : 1.0f;
 
                 if (a->specialTimer <= 0.0f && range < 300.0f) {
                     /* the special is what makes each pilot fly differently */
@@ -1560,7 +1835,10 @@ void AlliesUpdate(float dt)
                     AllySpecial(a);
                     if (GetRandomValue(0, 4) == 0) ChatSayText(i, kCry[a->role]);
 
-                    a->specialTimer = pr->cooldown * AllyCoolMul() *
+                    /* the dome is worth more than a burst, so it also costs
+                       more of the pilot's attention */
+                    float cool = (a->role == ALLY_JUNO) ? FIELD_COOLDOWN : pr->cooldown;
+                    a->specialTimer = cool * AllyCoolMul() *
                                       (0.85f + (float)GetRandomValue(0, 30) / 100.0f);
                     a->fireTimer    = ALLY_FIRE_TIME * AllyFireMul() * hot * 1.7f;
                 } else {
@@ -1885,6 +2163,22 @@ void PickupsUpdate(float dt)
                     allyHas->shieldTimer = fmaxf(allyHas->shieldTimer, ALLY_SHIELD_TIME);
                     allyHas->hp = fminf(allyHas->maxHp, allyHas->hp + 14.0f);
                     break;
+                case PICK_QUAD:
+                    quiet = (allyHas->quadTimer > 0.0f);
+                    allyHas->quadTimer = fmaxf(allyHas->quadTimer, ALLY_POWER_TIME);
+                    allyHas->hp = fminf(allyHas->maxHp, allyHas->hp + 10.0f);
+                    break;
+                case PICK_SPREAD:
+                    quiet = (allyHas->spreadTimer > 0.0f);
+                    allyHas->spreadTimer = fmaxf(allyHas->spreadTimer, ALLY_POWER_TIME);
+                    allyHas->hp = fminf(allyHas->maxHp, allyHas->hp + 10.0f);
+                    break;
+                case PICK_HOMING:
+                    quiet = (allyHas->homingTimer > 0.0f);
+                    allyHas->homingTimer = fmaxf(allyHas->homingTimer, ALLY_POWER_TIME);
+                    allyHas->hp = fminf(allyHas->maxHp, allyHas->hp + 10.0f);
+                    break;
+                default: break;
             }
             allyHas->hitFlash = 0.5f;
             p->alive = false;
@@ -1910,12 +2204,66 @@ void PickupsUpdate(float dt)
                 g.player.shieldTimer = fmaxf(g.player.shieldTimer, SHIELD_DURATION);
                 TextCopy(g.message, "SHIELD ON");
                 break;
+            case PICK_QUAD:
+                g.player.quadTimer = PLAYER_QUAD_TIME;
+                TextCopy(g.message, "QUAD CANNONS");
+                break;
+            case PICK_SPREAD:
+                g.player.spreadTimer = PLAYER_SPREAD_TIME;
+                TextCopy(g.message, "SPREAD GUN");
+                break;
+            case PICK_HOMING:
+                g.player.homingTimer = PLAYER_HOMING_TIME;
+                TextCopy(g.message, "SEEKERS");
+                break;
+            default: break;
         }
 
         g.messageTimer = 1.2f;
         PlaySfx(assets.pickup, 0.35f, 1.0f);
         SpawnBurstParticles(p->pos, 0.4f, COL_SHALLOW);
         p->alive = false;
+    }
+}
+
+/* Weapon crates are drawn rather than stamped: the sheet's three icons are the
+   supply crates, and a new gun should never be mistaken for a bandage. Each one
+   is a coloured plate with a little glyph on it - four barrels, a fan, and a
+   seeker. */
+static void DrawWeaponCrate(PickupKind kind, Vector2 at, float t)
+{
+    Color plate = (kind == PICK_QUAD)   ? (Color){ 198, 150, 255, 255 }
+                : (kind == PICK_SPREAD) ? (Color){ 255, 186,  92, 255 }
+                                        : (Color){ 140, 235, 150, 255 };
+    Color ink   = (Color){ 24, 34, 46, 255 };
+    float pulse = 0.5f + 0.5f * sinf(t * 5.0f);
+
+    DrawCircleV(at, 12.0f + pulse, (Color){ plate.r, plate.g, plate.b, 45 });
+    DrawCircleV(at, 7.5f, ink);
+    DrawCircleV(at, 6.0f, plate);
+
+    /* the glyph: 2px squares, so it stays pixel art at this size */
+    for (int i = 0; i < 4; i++) {
+        float sx = (i & 1) ? 2.0f : -2.0f;
+        float sy = (i & 2) ? 2.0f : -2.0f;
+
+        switch (kind) {
+            case PICK_QUAD:
+                DrawRectangle((int)(at.x + sx) - 1, (int)(at.y + sy) - 1, 3, 3, ink);
+                break;
+            case PICK_SPREAD: {
+                /* three barrels fanned out */
+                static const float fan[3][2] = { { 0.0f, -3.0f }, { -3.5f, 2.0f }, { 3.5f, 2.0f } };
+                DrawRectangle((int)(at.x + fan[i][0]) - 1, (int)(at.y + fan[i][1]) - 1, 3, 3, ink);
+                break;
+            }
+            default:
+                /* a round with a ring of dots around it */
+                DrawRectangle((int)at.x - 2, (int)at.y - 2, 4, 4, ink);
+                DrawCircleV(V2(at.x + cosf((float)i * PI * 0.5f) * 5.0f,
+                               at.y + sinf((float)i * PI * 0.5f) * 5.0f), 1.2f, ink);
+                break;
+        }
     }
 }
 
@@ -1928,11 +2276,16 @@ void PickupsDraw(void)
         /* blink out over the final seconds */
         if (p->life < 3.0f && ((int)(p->life * 10.0f) & 1)) continue;
 
+        Vector2 at = V2(p->pos.x, p->pos.y + sinf(p->t * 4.0f) * 2.0f);
+
+        if (p->kind >= PICK_QUAD) {
+            DrawWeaponCrate(p->kind, at, p->t);
+            continue;
+        }
+
         int sprite = (p->kind == PICK_HEALTH) ? TILE_PICK_HEALTH
                    : (p->kind == PICK_POWER)  ? TILE_PICK_POWER
                                               : TILE_PICK_SHIELD;
-
-        Vector2 at = V2(p->pos.x, p->pos.y + sinf(p->t * 4.0f) * 2.0f);
 
         DrawCircleV(at, 10.0f, (Color){ 24, 34, 46, 60 });   /* soft halo */
         DrawTileSprite(sprite, at, 0.0f, 1.0f, WHITE);
@@ -2068,25 +2421,27 @@ void StartWave(int wave)
                     g.waveDart + g.waveLancer + g.waveSplitter + g.waveTender;
     g.spawnTimer  = 1.2f;
 
-    /* Rearm the wing before the shooting starts. */
-    AlliesUpgrade();
-
+    /* Rearm the wing before the shooting starts. On the waves where the wing
+       levels up this shouts over the wave banner, which is exactly right. */
     snprintf(g.message, sizeof g.message, "WAVE %d", wave);
     g.messageTimer = 2.2f;
+
+    AlliesUpgrade();
 
     /* --- supply drop ------------------------------------------------- */
     /* Crates land on the islands around the squadron at the top of every
        wave, so there is something worth breaking formation for. Weapon and
-       hull crates are the common ones. */
-    int drops = 2 + wave / 3;
-    if (drops > 5) drops = 5;
+       hull crates are the common ones; the weapon crates are the prize. */
+    int drops = 3 + wave / 2;
+    if (drops > 7) drops = 7;
 
     for (int i = 0; i < drops; i++) {
-        Vector2 at   = ArenaRandomLandNear(g.player.pos, 90.0f, 360.0f);
+        Vector2 at   = ArenaRandomLandNear(g.player.pos, 90.0f, 380.0f);
         int     roll = GetRandomValue(0, 99);
 
-        PickupKind kind = (roll < 45) ? PICK_POWER
-                        : (roll < 85) ? PICK_HEALTH
+        PickupKind kind = (roll < 30) ? RandomWeaponCrate()
+                        : (roll < 50) ? PICK_POWER
+                        : (roll < 84) ? PICK_HEALTH
                                       : PICK_SHIELD;
         SpawnPickup(kind, at);
     }
@@ -2099,7 +2454,7 @@ void StartWave(int wave)
         for (int i = 0; i < MAX_ALLIES; i++) if (g.allies[i].alive) alive[n++] = i;
         if (n == 0) return;
 
-        if (wave > 1 && (wave % 5) == 0) {
+        if (wave > 1 && (wave % ALLY_VET_WAVES) == 0) {
             static const char *const kVet[ALLY_ROLE_COUNT] = {
                 "NEW ENGINES. TRY TO KEEP UP.",
                 "SQUADRON UPGRADE COMPLETE.",
