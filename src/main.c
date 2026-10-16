@@ -1023,6 +1023,16 @@ int main(int argc, char **argv)
         else if (g.state == STATE_PLAY)           GatherInput();
         else                                      input = (InputState){ 0 };
 
+#if defined(__EMSCRIPTEN__)
+        if (g.state == STATE_PLAY) {
+            EM_ASM({
+                var dbg = document.getElementById('debug');
+                if (dbg) dbg.textContent = 'jsMouse:' + window.__mx + ',' + window.__my +
+                    ' reticle:' + $0 + ',' + $1 + ' aim:' + $2.toFixed(2) + ',' + $3.toFixed(2);
+            }, input.reticle.x, input.reticle.y, input.aim.x, input.aim.y);
+        }
+#endif
+
         /* The game draws its own crosshair on the aim point, so the OS arrow
            would only be a second, differently-placed cursor on top of it. It
            comes back the moment we are in a menu. */
