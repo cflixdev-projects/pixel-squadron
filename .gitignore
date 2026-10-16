@@ -1,0 +1,27 @@
+# ---- build output ---------------------------------------------------------
+build/
+build-web/
+out/
+
+# ---- compiled objects / binaries -----------------------------------------
+*.o
+*.obj
+*.exe
+*.pdb
+*.ilk
+
+# ---- raw downloaded asset packs (only the curated assets are tracked) -----
+assets/_download/
+
+# ---- local captures and font probe boards --------------------------------
+shot_*.png
+probe_*.png
+
+# ---- save games -----------------------------------------------------------
+*.sav
+
+# ---- editors / OS noise ---------------------------------------------------
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

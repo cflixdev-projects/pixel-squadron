@@ -1,0 +1,566 @@
+/*****************************************************************************
+ *  PIXEL SQUADRON
+ *  A small top-down twin-stick arena shooter built with raylib.
+ *
+ *  game.h - shared tuning constants, types and module interfaces.
+ *
+ *  Modules
+ *      assets.c    sprite atlas helpers, loading, sound
+ *      arena.c     procedural island terrain
+ *      entities.c  player, enemies, bullets, particles, pickups
+ *      hud.c       in-game overlay + pixel number rendering
+ *      main.c      bootstrap, state machine, frame loop
+ *****************************************************************************/
+#ifndef GAME_H
+#define GAME_H
+
+#include "raylib.h"
+#include "raymath.h"
+#include <math.h>
+#include <stdbool.h>
+#include <stdint.h>
+
+/* -------------------------------------------------------------------------
+ *  Presentation
+ *  Everything is drawn into a 480x270 render target and blown up with
+ *  nearest-neighbour filtering, so the game keeps a crisp pixel-art look.
+ * ---------------------------------------------------------------------- */
+#define RENDER_W 480
+#define RENDER_H 270
+#define INTERNAL_ZOOM 1.0f
+
+/* A sprite drawn at a fractional position is sampled against a different part
+   of its texel every single frame, so its outline crawls. Snapping the draw
+   position to whole pixels - and turning sprites in fixed angular steps
+   instead of continuously - is what keeps moving pixel art looking solid. */
+#define ROT_STEPS 32.0f
+#define ROT_STEP  (360.0f / ROT_STEPS)
+
+static inline float SnapPix(float v) { return floorf(v); }
+static inline float SnapAngle(float deg)
+{
+    return floorf(deg / ROT_STEP + 0.5f) * ROT_STEP;
+}
+
+#define TILE_SIZE 16
+#define WORLD_TILES_X 512
+#define WORLD_TILES_Y 384
+#define WORLD_W (WORLD_TILES_X * TILE_SIZE) /* 8192 px */
+#define WORLD_H (WORLD_TILES_Y * TILE_SIZE) /* 6144 px */
+
+/* -------------------------------------------------------------------------
+ *  Sprite atlases
+ *  assets/sprites/ships.png : 4 columns x 6 rows of 32x32 cells
+ *  assets/sprites/tiles.png : 12 columns x 10 rows of 16x16 cells
+ *  Both sheets draw their sprites pointing "up", so a sprite that should
+ *  aim along `a` degrees of the world's X axis is rotated by a + 90.
+ * ---------------------------------------------------------------------- */
+#define SHIP_CELL 32
+#define SHIP_COLS 4
+#define TILE_CELL 16
+#define TILE_COLS 12
+#define ART_FORWARD 90.0f
+
+/* Kenney packs cells edge to edge, so a sprite drawn at a fractional screen
+   position can sample the neighbouring cell and smear a line of its colour
+   along the edge. Every atlas is rebuilt at load time with a one pixel
+   replicated border around each cell, which makes that impossible. */
+#define ATLAS_PAD 1
+
+/* Cell indices inside ships.png */
+enum ShipSprite {
+    SHIP_PLAYER       = 0,  /* blue fighter          */
+    SHIP_PLAYER_ALT   = 2,  /* green fighter         */
+    SHIP_WINGMAN      = 20, /* pale fighter - the wingmen tint it per pilot  */
+    SHIP_ALLY         = 8,  /* blue twin - wingmen. Blue reads clearly on both
+                               grass and sand, and the player is always drawn
+                               dead centre so the two can never be confused. */
+    SHIP_ENEMY_SCOUT  = 5,  /* red, swept wings      */
+    SHIP_ENEMY_RAIDER = 9,  /* red flying wing       */
+    SHIP_ENEMY_HEAVY  = 12, /* grey gunship          */
+};
+
+/* Cell indices inside tiles.png */
+enum TileSprite {
+    TILE_BOLT         = 0,  /* orange plasma bolt    */
+    TILE_BOLT_DOUBLE  = 1,
+    TILE_BOLT_WHITE   = 2,  /* enemy bolt            */
+    TILE_BOMB         = 3,
+    TILE_FX_BURST1    = 4,  /* explosion animation   */
+    TILE_FX_BURST2    = 5,
+    TILE_FX_BURST3    = 6,
+    TILE_FX_SPARKS    = 7,
+    TILE_FX_SMOKE     = 8,
+    TILE_PIXEL        = 9,  /* single lit pixel      */
+    TILE_MINE         = 16,
+    TILE_DIGIT_0      = 19, /* digits 0..4 live at 19..23 */
+    TILE_DIGIT_5      = 31, /* digits 5..9 live at 31..35 */
+    TILE_PICK_HEALTH  = 24,
+    TILE_PICK_POWER   = 25,
+    TILE_PICK_SHIELD  = 26,
+    TILE_TREE_A       = 48,
+    TILE_TREE_B       = 60,
+    TILE_TREE_C       = 36,
+    TILE_GRASS        = 50,
+    TILE_GRASS_ALT    = 110, /* same green, different speckle layout */
+    TILE_ROCK         = 84,
+    TILE_ROCK_ALT     = 72,
+    TILE_SAND         = 56,
+    TILE_SAND_ALT     = 116,
+};
+
+/* -------------------------------------------------------------------------
+ *  Palette - sampled straight out of the Kenney tilesheet so that code
+ *  drawn elements (water, foam, HUD) sit next to the art seamlessly.
+ * ---------------------------------------------------------------------- */
+#define COL_DEEP    CLITERAL(Color){ 16,  66,  96, 255 }
+#define COL_SEA     CLITERAL(Color){ 26, 108, 148, 255 }
+#define COL_WATER   CLITERAL(Color){ 44, 197, 246, 255 }
+#define COL_SHALLOW CLITERAL(Color){ 126, 226, 250, 255 }
+#define COL_FOAM    CLITERAL(Color){ 223, 246, 245, 255 }
+#define COL_INK     CLITERAL(Color){ 52,  85,  81, 255 } /* outline colour in the art */
+#define COL_UI_BG   CLITERAL(Color){ 24,  34,  46, 230 }
+#define COL_UI_LINE CLITERAL(Color){ 126, 226, 250, 255 }
+#define COL_HP      CLITERAL(Color){ 252, 104,  59, 255 }
+#define COL_HEAL    CLITERAL(Color){ 140, 245, 170, 255 } /* JUNO's repair field */
+#define COL_HP_LOW  CLITERAL(Color){ 222,  75,  30, 255 }
+#define COL_ALLY    CLITERAL(Color){ 126, 200, 255, 255 } /* wingman blue       */
+#define COL_ALLY_UI CLITERAL(Color){ 176, 226, 255, 255 }
+
+/* -------------------------------------------------------------------------
+ *  Pools
+ * ---------------------------------------------------------------------- */
+#define MAX_BULLETS 512
+#define MAX_ENEMIES 96
+#define MAX_PARTICLES 1024
+#define MAX_PICKUPS 32
+#define MAX_BURSTS 64
+#define MAX_ALLIES 3
+#define ALLY_RESPAWN 15.0f  /* seconds before a downed wingman rejoins */
+
+#define PLAYER_MAX_HP 100.0f
+
+/* Holding Shift spends boost fuel for a short burst of extra top speed. */
+#define PLAYER_BOOST_FUEL 1.6f   /* seconds of boost available          */
+#define PLAYER_BOOST_MULT 1.75f  /* top-speed multiplier while boosting */
+
+/* -------------------------------------------------------------------------
+ *  Terrain
+ * ---------------------------------------------------------------------- */
+typedef enum {
+    TER_WATER,
+    TER_SAND,
+    TER_GRASS,
+} TerrainKind;
+
+/* -------------------------------------------------------------------------
+ *  Entities
+ * ---------------------------------------------------------------------- */
+typedef struct {
+    Vector2 pos, vel;
+    float angle;       /* radians, 0 = +X */
+    float hp;
+    float fireTimer;
+    float powerTimer;  /* remaining seconds of the power-up  */
+    float shieldTimer; /* remaining seconds of invulnerability */
+    float engineTimer; /* thruster particle accumulator */
+    int weaponLevel;   /* 1..3 */
+    float hitFlash;
+    float boostFuel;   /* seconds of boost left (0..PLAYER_BOOST_FUEL) */
+    bool alive;
+} Player;
+
+typedef enum {
+    ENEMY_SCOUT,
+    ENEMY_RAIDER,
+    ENEMY_HEAVY,
+} EnemyKind;
+
+typedef struct {
+    bool alive;
+    EnemyKind kind;
+    Vector2 pos, vel;
+    float angle;
+    float hp, maxHp;
+    float fireTimer;
+    float radius;
+    float orbit;      /* preferred distance from the player */
+    float wobble;     /* per-enemy phase offset             */
+    float hitFlash;
+    float spawnFade;  /* 1 -> 0 while materialising         */
+    int score;
+} Enemy;
+
+/* Who fired a bullet: enemies hurt the squadron, the squadron hurts enemies. */
+typedef enum {
+    BULLET_ENEMY = 0,
+    BULLET_PLAYER,
+    BULLET_ALLY,
+} BulletOwner;
+
+/* The three wingmen are individuals, not clones: each one flies a different
+   special weapon, wears a different paint job and talks like their own
+   person. The profile table lives in entities.c. */
+typedef enum {
+    ALLY_VEX = 0,   /* hot-headed  - scattergun   */
+    ALLY_JUNO,      /* steady       - repair field */
+    ALLY_BIT,       /* nervous kid  - seeker swarm */
+    ALLY_ROLE_COUNT
+} AllyRole;
+
+typedef struct {
+    const char *name;
+    Color       hull;    /* tint for the ship sprite          */
+    Color       text;    /* readable version of it for text   */
+    int         ship;    /* cell in ships.png                 */
+    float       cooldown;/* seconds between specials          */
+    const char *special; /* name shown in the HUD             */
+} AllyProfile;
+
+const AllyProfile *AllyProfileOf(int role);
+
+/* A friendly wingman. It flies formation off the player's wing, breaks off to
+   engage anything that comes close, and is rebuilt after a short while if it
+   gets shot down. */
+typedef struct {
+    bool    alive;
+    Vector2 pos, vel;
+    float   angle;
+    float   hp, maxHp;
+    float   fireTimer;
+    float   hitFlash;
+    float   spawnFade;
+    float   respawnTimer;  /* only meaningful while !alive */
+    int     slot;          /* formation slot, also the HUD column */
+    int     role;          /* AllyRole */
+    float   specialTimer;  /* counts down to the next special attack */
+    float   distress;      /* >0 while calling for help (drives the beacon) */
+    float   helpCool;      /* quiet period between two calls for help */
+    float   assistTimer;   /* >0 while running to rescue a buddy */
+    Vector2 assistAt;      /* where the buddy in trouble was last seen */
+} Ally;
+
+typedef struct {
+    bool alive;
+    Vector2 pos, vel;
+    float angle;
+    float life;
+    float damage;
+    int sprite;
+    float scale;
+    int owner;   /* BulletOwner */
+    int slot;    /* which wingman fired it, -1 otherwise */
+    float homing;/* turn rate in rad/s, 0 = flies straight */
+} Bullet;
+
+typedef struct {
+    bool alive;
+    Vector2 pos, vel;
+    float life, maxLife;
+    float size;
+    float angle, spin;
+    Color color;
+} Particle;
+
+typedef struct {
+    bool alive;
+    Vector2 pos;
+    float t;
+    float scale;
+} Burst;
+
+typedef enum {
+    PICK_HEALTH,
+    PICK_POWER,
+    PICK_SHIELD,
+} PickupKind;
+
+typedef struct {
+    bool alive;
+    PickupKind kind;
+    Vector2 pos, vel;
+    float t;
+    float life;
+} Pickup;
+
+typedef enum {
+    STATE_TITLE,
+    STATE_PLAY,
+    STATE_PAUSED,
+    STATE_GAMEOVER,
+} GameState;
+
+/* Filled in by main.c each frame (keyboard/mouse on one hand, gamepad on
+   the other) and consumed by the entity update code. */
+typedef struct {
+    Vector2 move;         /* -1..1 on each axis */
+    Vector2 aim;          /* unit vector, world space */
+    Vector2 reticle;      /* mouse position in virtual-screen space */
+    bool firing;
+    bool boost;           /* Shift held - spend boost fuel for speed */
+    bool usingGamepad;
+} InputState;
+
+extern InputState input;
+
+/* -------------------------------------------------------------------------
+ *  Global game state (defined in main.c)
+ * ---------------------------------------------------------------------- */
+/* -------------------------------------------------------------------------
+ *  Radio chatter
+ *  The wingmen talk. Every line is kept in a ring buffer: the speaker gets a
+ *  speech bubble floating over their own ship, so any number of them can talk
+ *  at once without the radio flip-flopping between voices, and the same
+ *  buffer feeds the message log down the right-hand edge of the screen.
+ * ---------------------------------------------------------------------- */
+#define CHAT_SLOTS 14
+#define CHAT_TEXT  72
+#define CHAT_LOG   8      /* how many lines the side log keeps          */
+#define CHAT_ROW   13     /* vertical pitch of a log row                 */
+
+typedef enum {
+    CHAT_KILL,     /* just shot something down      */
+    CHAT_BUDDY,    /* a wingman went down           */
+    CHAT_HURT,     /* taking heavy damage           */
+    CHAT_SWARMED,  /* too many contacts on me       */
+    CHAT_IDLE,     /* quiet-moment banter           */
+    CHAT_WAVE,     /* new wave inbound              */
+    CHAT_CLEAR,    /* wave wiped out                */
+    CHAT_REPLY,    /* answering whoever just spoke  */
+    CHAT_EVENTS
+} ChatEvent;
+
+typedef struct {
+    bool  used;
+    int   slot;    /* which wingman is speaking, -1 for a system line */
+    char  who[16];
+    Color color;
+    char  text[CHAT_TEXT];
+    float t;       /* seconds since the line appeared */
+    float life;    /* total seconds it stays up       */
+} ChatLine;
+
+typedef struct {
+    GameState state;
+    float time;
+
+    Player player;
+    Enemy enemies[MAX_ENEMIES];
+    Ally  allies[MAX_ALLIES];
+    Bullet bullets[MAX_BULLETS];
+    Particle particles[MAX_PARTICLES];
+    Pickup pickups[MAX_PICKUPS];
+    Burst bursts[MAX_BURSTS];
+
+    /* run statistics */
+    int score;
+    int highScore;
+    int wave;
+    float waveTimer;     /* >0 -> counting down to the next wave */
+    int wavePending;     /* enemies still to spawn this wave      */
+    int waveScout;       /* remaining composition of the wave     */
+    int waveRaider;
+    int waveHeavy;
+    float spawnTimer;
+    float difficulty;
+    bool  waveBreak;     /* true during the breather between waves     */
+    float stateTimer;    /* generic timer for state transitions        */
+
+    /* feel */
+    float shake;
+    float hitStop;
+    float damageFlash;
+    float timer;         /* generic free-running clock for animations */
+
+    /* stats shown on the game-over screen */
+    int kills;
+    float survived;
+
+    char message[32];
+    float messageTimer;
+
+    /* wingman radio */
+    ChatLine chat[CHAT_SLOTS];
+    int      chatNext;      /* ring buffer cursor            */
+    float    chatIdle;      /* counts up to the next banter  */
+
+    bool autoPilot;      /* set by --demo so the game can screenshot itself */
+    float autoPilotTime;
+} Game;
+
+extern Game g;
+
+/* -------------------------------------------------------------------------
+ *  assets.c
+ * ---------------------------------------------------------------------- */
+typedef struct {
+    Texture2D ships;
+    Texture2D tiles;
+    /* Departure Mono is a monospaced pixel font whose native design size is an
+       11px em. raylib scales glyphs by (ascent - descent) rather than the em
+       square, and this font's (ascent - descent) is 700 units against a 550
+       unit em, so it is loaded at 14 to land exactly on that 11px grid and
+       rasterise with no anti-aliasing. It must only ever be drawn at whole
+       multiples of the native size (scale 1 = 11px, scale 2 = 22px headings):
+       any other size resamples the glyphs and chews the lettering up. */
+    Font font;       /* 11px native - HUD, radio, help and headings */
+
+    Sound shoot;
+    Sound shootHeavy;
+    Sound enemyShoot;
+    Sound explosion;
+    Sound explosionBig;
+    Sound hit;
+    Sound pickup;
+    Sound shield;
+    Sound engine;
+} Assets;
+
+extern Assets assets;
+
+void AssetsLoad(void);
+void AssetsUnload(void);
+void PlaySfx(Sound s, float volume, float pitch);
+
+/* Text drawn from a pixel font has to land on whole pixels. raylib's
+   DrawTextEx places glyphs on fractional coordinates, and any font size that
+   is not a whole multiple of the font's native size resamples every glyph -
+   the letters come out with dropped rows and look glitched. These helpers
+   snap each glyph to the pixel grid instead. `scale` must be a whole number. */
+float TextWidthPix(Font font, const char *text, int scale);
+void  DrawTextPix(Font font, const char *text, Vector2 at, int scale, Color tint);
+void  DrawTextPixCentered(Font font, const char *text, float y, int scale, Color tint);
+/* Same, plus a 1px drop shadow so the text survives busy terrain. */
+void  DrawTextPixShadow(Font font, const char *text, Vector2 at, int scale, Color tint);
+
+/* Source rectangle of cell `idx` inside an atlas whose cells are `cell`
+   pixels tall and `cols` wide. Accounts for the replicated padding border. */
+Rectangle AtlasSource(int idx, int cols, int cell);
+
+/* Draw cell `idx` of an atlas whose cells are `cell` pixels and `cols` wide.
+   `rotation` is degrees (clockwise); provide ART_FORWARD + angle for art
+   that points up. `pos` is the centre of the destination rectangle. */
+void DrawCell(Texture2D atlas, int idx, int cols, int cell, Vector2 pos,
+              float rotation, float scale, Color tint);
+void DrawShip(int idx, Vector2 pos, float rotDeg, float scale, Color tint);
+void DrawTileSprite(int idx, Vector2 pos, float rotDeg, float scale, Color tint);
+
+/* -------------------------------------------------------------------------
+ *  arena.c
+ * ---------------------------------------------------------------------- */
+void ArenaGenerate(unsigned seed);
+TerrainKind ArenaAt(int tx, int ty);
+bool ArenaBlocksAt(Vector2 world);
+Vector2 ArenaRandomLandPos(void);
+/* A spot in the middle of the most land-rich area of the map, used to place
+   the squadron and to aim the title-screen fly-by at something pretty. */
+Vector2 ArenaScenicPos(void);
+void ArenaDraw(Camera2D cam);
+
+/* -------------------------------------------------------------------------
+ *  entities.c
+ * ---------------------------------------------------------------------- */
+void EntitiesReset(void);
+void PlayerUpdate(float dt);
+void PlayerDraw(void);
+void PlayerDamage(float amount);
+
+void EnemiesUpdate(float dt);
+void EnemiesDraw(void);
+void EnemiesClear(void);
+int  EnemiesAliveCount(void);
+
+/* Wingmen */
+void AlliesUpdate(float dt);
+void AlliesDraw(void);
+void AllyDamage(Ally *a, float amount);
+void AllySpecial(Ally *a);
+int  AlliesAliveCount(void);
+Vector2 AllyFormationPos(int slot);
+/* Puts a beacon on the map: the wingman names itself as being in trouble, the
+   others turn to help, and the HUD shows a red marker. */
+void AllyCallForHelp(Ally *a);
+
+/* -------------------------------------------------------------------------
+ *  chat.c - wingman radio chatter
+ * ---------------------------------------------------------------------- */
+void ChatReset(void);
+void ChatUpdate(float dt);
+void ChatDraw(void);
+Vector2 WorldToScreen(Vector2 world);   /* main.c - world -> virtual screen */
+
+void ChatSay(int slot, ChatEvent ev);                 /* a wingman speaks     */
+void ChatSayText(int slot, const char *text);
+void ChatSystem(const char *who, Color color, const char *text);
+
+void SpawnEnemy(EnemyKind kind, Vector2 pos);
+/* Returns the bullet so callers can tag it (seeker missiles set homing). */
+Bullet *SpawnBullet(Vector2 pos, Vector2 vel, int sprite, float damage, float life,
+                    float scale, int owner, int slot);
+void SpawnPickup(PickupKind kind, Vector2 pos);
+void SpawnBurst(Vector2 pos, float scale);
+void SpawnBurstParticles(Vector2 pos, float power, Color tint);
+
+void BulletsUpdate(float dt);
+void BulletsDraw(void);
+void PickupsUpdate(float dt);
+void PickupsDraw(void);
+void ParticlesUpdate(float dt);
+void ParticlesDraw(void);
+void BurstsUpdate(float dt);
+void BurstsDraw(void);
+
+void DamageEnemy(Enemy *e, float amount);
+void StartWave(int wave);
+void WaveSpawnStep(float dt);
+
+/* -------------------------------------------------------------------------
+ *  hud.c
+ * ---------------------------------------------------------------------- */
+void DrawPixelNumber(long value, Vector2 pos, int digits, float scale, Color tint);
+void HudDraw(Camera2D cam);
+void HudDrawTitle(void);
+void HudDrawGameOver(void);
+void HudDrawPause(void);
+
+/* -------------------------------------------------------------------------
+ *  helpers
+ * ---------------------------------------------------------------------- */
+static inline Vector2 V2(float x, float y) { return (Vector2){ x, y }; }
+static inline Vector2 V2Add(Vector2 a, Vector2 b) { return V2(a.x + b.x, a.y + b.y); }
+static inline Vector2 V2Sub(Vector2 a, Vector2 b) { return V2(a.x - b.x, a.y - b.y); }
+static inline Vector2 V2Scale(Vector2 a, float s) { return V2(a.x * s, a.y * s); }
+static inline float V2Len(Vector2 a) { return sqrtf(a.x * a.x + a.y * a.y); }
+
+static inline Vector2 V2Norm(Vector2 a)
+{
+    float l = V2Len(a);
+    return (l > 0.0001f) ? V2(a.x / l, a.y / l) : V2(0.0f, 0.0f);
+}
+
+static inline Vector2 V2ClampLen(Vector2 a, float maxLen)
+{
+    float l = V2Len(a);
+    return (l > maxLen) ? V2(a.x / l * maxLen, a.y / l * maxLen) : a;
+}
+
+static inline float WrapAngle(float a)
+{
+    while (a > PI)  a -= 2.0f * PI;
+    while (a < -PI) a += 2.0f * PI;
+    return a;
+}
+
+static inline float AngleLerp(float from, float to, float t)
+{
+    return from + WrapAngle(to - from) * t;
+}
+
+/* Squared distance helper - avoids sqrtf in the hot collision loops. */
+static inline float Dist2(Vector2 a, Vector2 b)
+{
+    float dx = a.x - b.x, dy = a.y - b.y;
+    return dx * dx + dy * dy;
+}
+
+#endif /* GAME_H */
