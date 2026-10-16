@@ -300,6 +300,7 @@ static void UpdateViewport(void)
     if (vw > 1440) vw = 1440;
     if (vh > 900)  vh = 900;
 
+    if (s < 1) s = 1;
     viewScale  = (float)s;
     viewOffset = V2(0.0f, 0.0f);
 
@@ -350,11 +351,13 @@ static void GatherInput(void)
            opens fire, so a worn stick that never quite centres cannot spray
            the map on its own. */
         float rsLen = V2Len(rs);
-        if (rsLen > 0.30f) {
+        /* A high deadzone: a worn or phantom stick must never be able to
+           steal the aim from the mouse. Only a deliberate push counts. */
+        if (rsLen > 0.55f) {
             aim    = V2Norm(rs);
             padAim = true;
         }
-        if (rsLen > 0.42f) firing = true;
+        if (rsLen > 0.62f) firing = true;
 
         if (IsGamepadButtonDown(0, binds.button[BIND_FIRE]))  firing   = true;
         if (IsGamepadButtonDown(0, binds.button[BIND_BOOST])) boosting = true;
@@ -381,11 +384,19 @@ static void GatherInput(void)
     static Vector2 lastMouse = { -1.0f, -1.0f };
 
     bool mouseMoved = (lastMouse.x >= 0.0f) &&
-                      (fabsf(mouseVirtual.x - lastMouse.x) > 0.5f ||
-                       fabsf(mouseVirtual.y - lastMouse.y) > 0.5f);
+                      (fabsf(mouseVirtual.x - lastMouse.x) > 0.1f ||
+                       fabsf(mouseVirtual.y - lastMouse.y) > 0.1f);
     lastMouse = mouseVirtual;
 
+    /* The mouse wins the moment it moves and keeps winning for a short while
+       afterwards, so a drifting gamepad stick cannot reclaim the aim between
+       two mouse events. */
+    static float mouseLinger = 0.0f;
     if (mouseMoved || IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+        padMode      = false;
+        mouseLinger  = 0.35f;
+    } else if (mouseLinger > 0.0f) {
+        mouseLinger -= GetFrameTime();
         padMode = false;
     } else if (padAim) {
         padMode = true;
@@ -410,6 +421,13 @@ static void GatherInput(void)
     input.rally        = rally;
     input.special      = special;
     input.usingGamepad = padMode;
+    if (mouseVirtual.x != mouseVirtual.x || mouseVirtual.y != mouseVirtual.y) {
+        mouseVirtual = V2(BASE_W * 0.5f, BASE_H * 0.5f);
+    }
+    if (mouseVirtual.x < 0.0f) mouseVirtual.x = 0.0f;
+    if (mouseVirtual.x > (float)BASE_W) mouseVirtual.x = (float)BASE_W;
+    if (mouseVirtual.y < 0.0f) mouseVirtual.y = 0.0f;
+    if (mouseVirtual.y > (float)BASE_H) mouseVirtual.y = (float)BASE_H;
     input.reticle      = mouseVirtual;
 }
 
