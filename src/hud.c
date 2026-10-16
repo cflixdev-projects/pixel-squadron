@@ -177,13 +177,22 @@ void HudDraw(Camera2D cam)
     DrawTextPixShadow(assets.font, waveLabel,
                       V2(floorf((RENDER_W - waveW) * 0.5f), 10), 1, COL_FOAM);
 
-    /* --- boost meter and active buffs, bottom left -------------------- */
+    /* --- boost + recall meters, bottom left --------------------------- */
     float y = RENDER_H - 30.0f;
 
     /* Boost is a core control, so its meter is always on. */
     DrawTextPixShadow(assets.font, "BOOST", V2(8, y), 1, COL_SHALLOW);
     DrawTimerBar((Rectangle){ 8, y + 13, 72, 5 }, p->boostFuel / PLAYER_BOOST_FUEL,
                  (Color){ 255, 236, 159, 230 });
+
+    /* The recall radio needs a moment to recharge between calls. */
+    bool rallyReady = (g.rallyCool <= 0.0f);
+    DrawTextPixShadow(assets.font, "RALLY Q", V2(96, y), 1,
+                      rallyReady ? COL_ALLY_UI : (Color){ 96, 116, 134, 255 });
+    DrawTimerBar((Rectangle){ 96, y + 13, 72, 5 },
+                 1.0f - g.rallyCool / RALLY_COOLDOWN,
+                 rallyReady ? (Color){ 126, 226, 250, 230 }
+                            : (Color){ 90, 122, 152, 220 });
     y -= 22.0f;
 
     if (p->powerTimer > 0.0f) {
@@ -221,6 +230,24 @@ void HudDraw(Camera2D cam)
             Clamp(screen.y, 8.0f, RENDER_H - 8.0f));
         DrawRectangle((int)edge.x - 1, (int)edge.y - 1, 3, 3,
                       (Color){ 255, 130, 140, 170 });
+    }
+
+    /* --- supply crates, marked on the edge while they are off screen --- */
+    for (int i = 0; i < MAX_PICKUPS; i++) {
+        Pickup *p = &g.pickups[i];
+        if (!p->alive) continue;
+
+        Vector2 sp = GetWorldToScreen2D(p->pos, cam);
+        if (sp.x > 10 && sp.x < RENDER_W - 10 &&
+            sp.y > 10 && sp.y < RENDER_H - 10) continue;
+
+        Color c = (p->kind == PICK_POWER)  ? (Color){ 255, 236, 159, 210 }
+                : (p->kind == PICK_HEALTH) ? (Color){ 140, 245, 170, 210 }
+                                           : (Color){ 126, 226, 250, 210 };
+
+        Vector2 edge = V2(Clamp(sp.x, 6.0f, RENDER_W - 6.0f),
+                          Clamp(sp.y, 6.0f, RENDER_H - 6.0f));
+        DrawRectangle((int)edge.x - 2, (int)edge.y - 2, 4, 4, c);
     }
 
     /* --- wingmen in trouble, marked on the edge of the screen ---------- */
@@ -276,107 +303,65 @@ void HudDraw(Camera2D cam)
 }
 
 /* --------------------------------------------------------------------------
- *  Title card
- * ----------------------------------------------------------------------- */
-void HudDrawTitle(void)
-{
-    DrawRectangle(0, 0, RENDER_W, RENDER_H, (Color){ 12, 20, 28, 130 });
-
-    /* subtle banner behind the title */
-    DrawRectangle(0, 44, RENDER_W, 68, (Color){ 12, 20, 28, 175 });
-    DrawRectangle(0, 44, RENDER_W, 1, (Color){ 126, 226, 250, 90 });
-    DrawRectangle(0, 111, RENDER_W, 1, (Color){ 126, 226, 250, 90 });
-
-    DrawTextCentered("PIXEL SQUADRON", 50, 2, assets.font, COL_FOAM);
-    DrawTextCentered("T W I N - S T I C K   A R E N A", 92, 1, assets.font, COL_SHALLOW);
-
-    /* the squadron flies past, each in their own colours */
-    for (int i = 0; i < MAX_ALLIES; i++) {
-        const AllyProfile *pr = AllyProfileOf(i);
-        float t = fmodf(g.timer * (26.0f + (float)i * 9.0f) + (float)i * 60.0f,
-                        RENDER_W + 120.0f) - 60.0f;
-
-        DrawShip(pr->ship, V2(t, 132.0f + (float)i * 16.0f), ART_FORWARD + 4.0f,
-                 0.5f, pr->hull);
-    }
-
-    /* who is riding with you, in their own colours */
-    float w[ALLY_ROLE_COUNT];
-    float total = 0.0f;
-    for (int i = 0; i < ALLY_ROLE_COUNT; i++) {
-        const AllyProfile *pr = AllyProfileOf(i);
-        w[i] = TextWidthPix(assets.font, pr->name, 1);
-        total += w[i] + 10.0f;
-    }
-    total -= 10.0f;
-
-    float x = floorf((RENDER_W - total) * 0.5f);
-    for (int i = 0; i < ALLY_ROLE_COUNT; i++) {
-        const AllyProfile *pr = AllyProfileOf(i);
-        DrawTextPix(assets.font, pr->name, V2(x, 186.0f), 1, pr->text);
-        x += w[i];
-        if (i < ALLY_ROLE_COUNT - 1) {
-            DrawTextPix(assets.font, "-", V2(x + 4.0f, 186.0f), 1,
-                        (Color){ 126, 226, 250, 140 });
-            x += 14.0f;
-        }
-    }
-
-    /* blink on a slow cycle rather than a hard flicker */
-    float blink = 0.55f + 0.45f * sinf(g.timer * 4.0f);
-    Color prompt = COL_FOAM;
-    prompt.a = (unsigned char)(120.0f + 135.0f * blink);
-    DrawTextCentered("PRESS ENTER OR [A] TO FLY", 206, 1, assets.font, prompt);
-
-    DrawTextCentered("WASD / LEFT STICK  -  MOVE", 226, 1, assets.font,
-                     (Color){ 126, 226, 250, 190 });
-    DrawTextCentered("MOUSE / RIGHT STICK  -  AIM", 238, 1, assets.font,
-                     (Color){ 126, 226, 250, 190 });
-    DrawTextCentered("LMB / RT - FIRE    SHIFT - BOOST    F11 - FULLSCREEN",
-                     250, 1, assets.font, (Color){ 126, 226, 250, 190 });
-
-    if (g.highScore > 0) {
-        char best[48];
-        snprintf(best, sizeof best, "BEST  %07d", g.highScore);
-        DrawTextCentered(best, 26, 1, assets.font, (Color){ 255, 200, 80, 220 });
-    }
-}
-
-/* --------------------------------------------------------------------------
  *  Game over
  * ----------------------------------------------------------------------- */
 void HudDrawGameOver(void)
 {
     DrawRectangle(0, 0, RENDER_W, RENDER_H, (Color){ 12, 20, 28, 190 });
 
-    DrawTextCentered("SQUADRON DOWN", 46, 2, assets.font, COL_HP);
+    /* The block is laid out around the middle of the screen and every line is
+       measured against a fixed pitch, so the last entry of the report always
+       sits a clear 15px above the bottom of the panel - on any window shape.
+       The record tag lives on the SCORE line rather than below the panel so it
+       cannot push the prompts off the bottom. */
+    float top = floorf(RENDER_H * 0.5f) - 88.0f;
+    if (top < 6.0f) top = 6.0f;
 
-    DrawPanel((Rectangle){ RENDER_W * 0.5f - 90, 92, 180, 82 });
-    DrawTextPixShadow(assets.font, "SCORE", V2(RENDER_W * 0.5f - 80, 100), 1, COL_SHALLOW);
-    DrawPixelNumber((long)g.score, V2(RENDER_W * 0.5f - 80, 112), 7, 1.0f, WHITE);
+    DrawTextCentered("SQUADRON DOWN", (int)top, 2, assets.font, COL_HP);
 
-    char line[64];
-    snprintf(line, sizeof line, "WAVES SURVIVED   %d", g.wave - 1);
-    DrawTextPixShadow(assets.font, line, V2(RENDER_W * 0.5f - 80, 132), 1, COL_FOAM);
+    const float panelW = 232.0f;
+    const float panelH = 116.0f;
+    const float panelX = floorf((RENDER_W - panelW) * 0.5f);
+    const float panelY = top + 30.0f;
+    const float textX  = panelX + 16.0f;
 
-    snprintf(line, sizeof line, "KILLS            %d", g.kills);
-    DrawTextPixShadow(assets.font, line, V2(RENDER_W * 0.5f - 80, 146), 1, COL_FOAM);
+    DrawPanel((Rectangle){ panelX, panelY, panelW, panelH });
 
-    snprintf(line, sizeof line, "TIME           %02d:%02d",
-             (int)g.survived / 60, (int)g.survived % 60);
-    DrawTextPixShadow(assets.font, line, V2(RENDER_W * 0.5f - 80, 160), 1, COL_FOAM);
+    DrawTextPixShadow(assets.font, "SCORE", V2(textX, panelY + 10), 1, COL_SHALLOW);
 
     if (g.score >= g.highScore && g.score > 0) {
         float blink = 0.6f + 0.4f * sinf(g.timer * 6.0f);
         Color c = { 255, 200, 80, (unsigned char)(255.0f * blink) };
-        DrawTextCentered("NEW RECORD", 182, 1, assets.font, c);
+        const char *tag = "NEW RECORD";
+        DrawTextPixShadow(assets.font, tag,
+                          V2(panelX + panelW - 16.0f - TextWidthPix(assets.font, tag, 1),
+                             panelY + 10), 1, c);
     }
+
+    DrawPixelNumber((long)g.score, V2(textX, panelY + 26), 7, 1.0f, WHITE);
+
+    char line[64];
+
+    snprintf(line, sizeof line, "WAVES SURVIVED  %d", g.wave - 1);
+    DrawTextPixShadow(assets.font, line, V2(textX, panelY + 46), 1, COL_FOAM);
+
+    snprintf(line, sizeof line, "KILLS           %d", g.kills);
+    DrawTextPixShadow(assets.font, line, V2(textX, panelY + 60), 1, COL_FOAM);
+
+    snprintf(line, sizeof line, "CRITICAL HITS   %d", g.crits);
+    DrawTextPixShadow(assets.font, line, V2(textX, panelY + 74), 1, COL_FOAM);
+
+    snprintf(line, sizeof line, "TIME         %02d:%02d",
+             (int)g.survived / 60, (int)g.survived % 60);
+    DrawTextPixShadow(assets.font, line, V2(textX, panelY + 88), 1, COL_FOAM);
+
+    float below = panelY + panelH + 8.0f;
 
     float blink = 0.55f + 0.45f * sinf(g.timer * 4.0f);
     Color prompt = COL_FOAM;
     prompt.a = (unsigned char)(120.0f + 135.0f * blink);
-    DrawTextCentered("PRESS ENTER TO FLY AGAIN", 212, 1, assets.font, prompt);
-    DrawTextCentered("ESC  -  QUIT", 228, 1, assets.font,
+    DrawTextCentered("PRESS ENTER TO FLY AGAIN", (int)below, 1, assets.font, prompt);
+    DrawTextCentered("ESC  -  QUIT", (int)below + 15.0f, 1, assets.font,
                      (Color){ 126, 226, 250, 160 });
 }
 
@@ -386,8 +371,13 @@ void HudDrawGameOver(void)
 void HudDrawPause(void)
 {
     DrawRectangle(0, 0, RENDER_W, RENDER_H, (Color){ 12, 20, 28, 170 });
-    DrawTextCentered("PAUSED", 104, 2, assets.font, COL_FOAM);
-    DrawTextCentered("P  -  RESUME", 146, 1, assets.font, COL_SHALLOW);
-    DrawTextCentered("ESC  -  QUIT TO TITLE", 160, 1, assets.font,
-                     (Color){ 126, 226, 250, 160 });
+
+    int centre = (int)floorf(RENDER_H * 0.5f);
+
+    DrawTextCentered("PAUSED", centre - 22, 2, assets.font, COL_FOAM);
+    DrawTextCentered("P / ESC  -  RESUME", centre + 12, 1, assets.font, COL_SHALLOW);
+    DrawTextCentered("WASD - MOVE    MOUSE - AIM    LMB - FIRE", centre + 28, 1,
+                     assets.font, (Color){ 126, 226, 250, 160 });
+    DrawTextCentered("SHIFT - BOOST    Q - RALLY THE WING    F11 - FULLSCREEN",
+                     centre + 42, 1, assets.font, (Color){ 126, 226, 250, 160 });
 }

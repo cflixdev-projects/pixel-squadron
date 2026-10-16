@@ -22,11 +22,28 @@
 
 /* -------------------------------------------------------------------------
  *  Presentation
- *  Everything is drawn into a 480x270 render target and blown up with
- *  nearest-neighbour filtering, so the game keeps a crisp pixel-art look.
+ *  Everything is drawn into a render target and blown up with nearest-
+ *  neighbour filtering, so the game keeps a crisp pixel-art look.
+ *
+ *  BASE_W x BASE_H is the design size - what you get on a 1920x1080 window.
+ *  The real render target is then sized to the window: the zoom is always a
+ *  whole number and the target grows until it covers the window completely, so
+ *  there are never letterbox bars and nothing is ever cropped. A wide window
+ *  simply sees more of the world, and because the zoom is a whole number the
+ *  pixels stay square.
+ *
+ *  Anything that lays itself out against the screen (the HUD, the radio log,
+ *  the camera) reads RENDER_W / RENDER_H, which follow the current target.
  * ---------------------------------------------------------------------- */
-#define RENDER_W 480
-#define RENDER_H 270
+#define BASE_W 480
+#define BASE_H 270
+
+extern int gViewW;   /* virtual screen size for the current window */
+extern int gViewH;
+
+#define RENDER_W (gViewW)
+#define RENDER_H (gViewH)
+
 #define INTERNAL_ZOOM 1.0f
 
 /* A sprite drawn at a fractional position is sampled against a different part
@@ -42,11 +59,10 @@ static inline float SnapAngle(float deg)
     return floorf(deg / ROT_STEP + 0.5f) * ROT_STEP;
 }
 
+/* The archipelago has no edges: the terrain is a pure function of the tile
+   coordinate, so the squadron can fly in any direction for as long as it
+   lives. Tiles are only ever looked up, never stored. */
 #define TILE_SIZE 16
-#define WORLD_TILES_X 512
-#define WORLD_TILES_Y 384
-#define WORLD_W (WORLD_TILES_X * TILE_SIZE) /* 8192 px */
-#define WORLD_H (WORLD_TILES_Y * TILE_SIZE) /* 6144 px */
 
 /* -------------------------------------------------------------------------
  *  Sprite atlases
@@ -130,11 +146,12 @@ enum TileSprite {
 /* -------------------------------------------------------------------------
  *  Pools
  * ---------------------------------------------------------------------- */
-#define MAX_BULLETS 512
-#define MAX_ENEMIES 96
-#define MAX_PARTICLES 1024
-#define MAX_PICKUPS 32
-#define MAX_BURSTS 64
+#define MAX_BULLETS 768
+#define MAX_ENEMIES 128
+#define MAX_PARTICLES 1536
+#define MAX_PICKUPS 48
+#define MAX_BURSTS 80
+#define MAX_POPUPS 40
 #define MAX_ALLIES 3
 #define ALLY_RESPAWN 15.0f  /* seconds before a downed wingman rejoins */
 
@@ -143,6 +160,15 @@ enum TileSprite {
 /* Holding Shift spends boost fuel for a short burst of extra top speed. */
 #define PLAYER_BOOST_FUEL 1.6f   /* seconds of boost available          */
 #define PLAYER_BOOST_MULT 1.75f  /* top-speed multiplier while boosting */
+
+/* The player can call the wing back at any time; the radio takes a moment to
+   recover before it can be used again. */
+#define RALLY_TIME 4.5f
+#define RALLY_COOLDOWN 7.0f
+
+/* Chance that any given friendly hit lands critically, for extra hurt. */
+#define CRIT_CHANCE 20      /* percent */
+#define CRIT_MULT   2.5f
 
 /* -------------------------------------------------------------------------
  *  Terrain
@@ -238,6 +264,7 @@ typedef struct {
     float   helpCool;      /* quiet period between two calls for help */
     float   assistTimer;   /* >0 while running to rescue a buddy */
     Vector2 assistAt;      /* where the buddy in trouble was last seen */
+    float   rallyTimer;    /* >0 while answering the player's recall */
 } Ally;
 
 typedef struct {
@@ -283,8 +310,16 @@ typedef struct {
     float life;
 } Pickup;
 
+/* Short-lived floating text - "CRIT" over a shot that landed hard. */
+typedef struct {
+    bool    alive;
+    Vector2 pos;
+    float   t, life;
+    char    text[12];
+    Color   color;
+} Popup;
+
 typedef enum {
-    STATE_TITLE,
     STATE_PLAY,
     STATE_PAUSED,
     STATE_GAMEOVER,
@@ -298,6 +333,7 @@ typedef struct {
     Vector2 reticle;      /* mouse position in virtual-screen space */
     bool firing;
     bool boost;           /* Shift held - spend boost fuel for speed */
+    bool rally;           /* Q / left shoulder - call the wing home   */
     bool usingGamepad;
 } InputState;
 
@@ -351,6 +387,7 @@ typedef struct {
     Particle particles[MAX_PARTICLES];
     Pickup pickups[MAX_PICKUPS];
     Burst bursts[MAX_BURSTS];
+    Popup popups[MAX_POPUPS];
 
     /* run statistics */
     int score;
@@ -365,6 +402,8 @@ typedef struct {
     float difficulty;
     bool  waveBreak;     /* true during the breather between waves     */
     float stateTimer;    /* generic timer for state transitions        */
+    float rallyCool;     /* >0 while the recall radio recharges        */
+    int   crits;         /* how many shots landed critically this run  */
 
     /* feel */
     float shake;
@@ -451,9 +490,11 @@ void DrawTileSprite(int idx, Vector2 pos, float rotDeg, float scale, Color tint)
 void ArenaGenerate(unsigned seed);
 TerrainKind ArenaAt(int tx, int ty);
 bool ArenaBlocksAt(Vector2 world);
-Vector2 ArenaRandomLandPos(void);
-/* A spot in the middle of the most land-rich area of the map, used to place
-   the squadron and to aim the title-screen fly-by at something pretty. */
+/* A random spot on clear land between `rmin` and `rmax` pixels from `centre`.
+   Supplies are dropped into the world this way. */
+Vector2 ArenaRandomLandNear(Vector2 centre, float rmin, float rmax);
+/* A spot in the middle of the most land-rich area near the origin, used to
+   place the squadron so a run does not start in the middle of the ocean. */
 Vector2 ArenaScenicPos(void);
 void ArenaDraw(Camera2D cam);
 
@@ -480,6 +521,10 @@ Vector2 AllyFormationPos(int slot);
 /* Puts a beacon on the map: the wingman names itself as being in trouble, the
    others turn to help, and the HUD shows a red marker. */
 void AllyCallForHelp(Ally *a);
+/* The player's recall: every wingman drops what it is doing and comes back. */
+void AlliesRally(void);
+/* Hands the wing out better gear as the waves get meaner. */
+void AlliesUpgrade(void);
 
 /* -------------------------------------------------------------------------
  *  chat.c - wingman radio chatter
@@ -500,6 +545,7 @@ Bullet *SpawnBullet(Vector2 pos, Vector2 vel, int sprite, float damage, float li
 void SpawnPickup(PickupKind kind, Vector2 pos);
 void SpawnBurst(Vector2 pos, float scale);
 void SpawnBurstParticles(Vector2 pos, float power, Color tint);
+void SpawnPopup(Vector2 pos, const char *text, Color color);
 
 void BulletsUpdate(float dt);
 void BulletsDraw(void);
@@ -509,6 +555,8 @@ void ParticlesUpdate(float dt);
 void ParticlesDraw(void);
 void BurstsUpdate(float dt);
 void BurstsDraw(void);
+void PopupsUpdate(float dt);
+void PopupsDraw(void);
 
 void DamageEnemy(Enemy *e, float amount);
 void StartWave(int wave);
@@ -519,7 +567,6 @@ void WaveSpawnStep(float dt);
  * ---------------------------------------------------------------------- */
 void DrawPixelNumber(long value, Vector2 pos, int digits, float scale, Color tint);
 void HudDraw(Camera2D cam);
-void HudDrawTitle(void);
 void HudDrawGameOver(void);
 void HudDrawPause(void);
 

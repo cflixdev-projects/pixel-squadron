@@ -30,6 +30,7 @@
 #define ALLY_RADIUS       9.0f
 #define ALLY_MAX_SPEED    200.0f  /* above the player's 132 (231 while
                                      boosting) so they can catch back up */
+#define ALLY_RALLY_SPEED  280.0f  /* sprint while answering a recall       */
 #define ALLY_FIRE_TIME    0.28f
 #define ALLY_BULLET_SPD   340.0f
 #define ALLY_BULLET_DMG   1.0f
@@ -41,6 +42,14 @@
 #define ALLY_SWARM_RADIUS 150.0f  /* contacts this close count as being swarmed  */
 #define ALLY_SWARM_COUNT  4       /* ...and this many of them is a call for help */
 #define WINGMAN_RAM_DMG   14.0f
+
+/* Every wave the wing gets rearmed, so they keep pace with a swarm that is
+   also getting nastier. The numbers are deliberately close to the enemy
+   scaling curve: it should stay a fight. */
+#define ALLY_RANK_HP      6.0f    /* extra max hull per wave            */
+#define ALLY_RANK_DMG     0.10f   /* extra bullet damage per wave       */
+#define ALLY_RANK_FIRE    0.030f  /* faster reload per wave             */
+#define ALLY_RANK_COOL    0.035f  /* faster specials per wave           */
 
 #define ENEMY_BULLET_SPD  175.0f
 #define ENEMY_BULLET_DMG  9.0f
@@ -184,8 +193,26 @@ void SpawnPickup(PickupKind kind, Vector2 pos)
             .pos   = pos,
             .vel   = V2((float)GetRandomValue(-20, 20), (float)GetRandomValue(-20, 20)),
             .t     = 0.0f,
-            .life  = 14.0f,
+            .life  = 20.0f,
         };
+        return;
+    }
+}
+
+/* Floating combat text. Only crits use it, so it stays rare enough to read. */
+void SpawnPopup(Vector2 pos, const char *text, Color color)
+{
+    static int cursor = 0;
+
+    for (int i = 0; i < MAX_POPUPS; i++) {
+        int idx = (cursor + i) % MAX_POPUPS;
+        Popup *p = &g.popups[idx];
+        if (p->alive) continue;
+
+        cursor = idx + 1;
+        *p = (Popup){ .alive = true, .pos = pos, .t = 0.0f, .life = 0.75f,
+                      .color = color };
+        snprintf(p->text, sizeof p->text, "%s", text ? text : "");
         return;
     }
 }
@@ -259,6 +286,10 @@ void EntitiesReset(void)
     for (int i = 0; i < MAX_PARTICLES; i++) g.particles[i].alive = false;
     for (int i = 0; i < MAX_PICKUPS; i++)   g.pickups[i].alive   = false;
     for (int i = 0; i < MAX_BURSTS; i++)    g.bursts[i].alive    = false;
+    for (int i = 0; i < MAX_POPUPS; i++)    g.popups[i].alive    = false;
+
+    g.rallyCool = 0.0f;
+    g.crits     = 0;
 
     /* Start over the most land-rich part of whatever the arena generator just
        produced, so the first wave does not have to be found across an ocean. */
@@ -390,9 +421,12 @@ void PlayerUpdate(float dt)
 
     p->pos = V2Add(p->pos, V2Scale(p->vel, dt));
 
+    /* The world has no edge, so the only limit on where the player can go is
+       how far the float grid still counts pixels - which is thousands of
+       screens away. */
     const float margin = 18.0f;
-    p->pos.x = Clamp(p->pos.x, margin, WORLD_W - margin);
-    p->pos.y = Clamp(p->pos.y, margin, WORLD_H - margin);
+    p->pos.x = Clamp(p->pos.x, -1.0e6f + margin, 1.0e6f - margin);
+    p->pos.y = Clamp(p->pos.y, -1.0e6f + margin, 1.0e6f - margin);
 
     /* --- aim ---------------------------------------------------------- */
     if (V2Len(input.aim) > 0.01f) {
@@ -822,6 +856,69 @@ void AllyDamage(Ally *a, float amount)
     g.messageTimer = 1.6f;
 }
 
+/* --------------------------------------------------------------------------
+ *  Wing rank
+ *
+ *  A wingman is only as good as the kit they are flying, and the swarm gets
+ *  meaner every wave. Rather than making the player carry the whole squadron
+ *  forever, the wing is rearmed as the waves climb: more hull, harder-hitting
+ *  rounds, quicker reloads and specials that come back sooner. Their strength
+ *  tracks the wave number directly so it is always in step with the enemy
+ *  scaling curve and a long run still ends the same way - badly.
+ * ----------------------------------------------------------------------- */
+static float AllyRank(void)       { return (float)(g.wave > 0 ? g.wave - 1 : 0); }
+static float AllyMaxHpForRank(void){ return ALLY_MAX_HP + AllyRank() * ALLY_RANK_HP; }
+static float AllyDamageMul(void)  { return 1.0f + AllyRank() * ALLY_RANK_DMG; }
+static float AllyFireMul(void)    { return fmaxf(0.55f, 1.0f - AllyRank() * ALLY_RANK_FIRE); }
+static float AllyCoolMul(void)    { return fmaxf(0.50f, 1.0f - AllyRank() * ALLY_RANK_COOL); }
+
+/* Called at the top of every wave: their hulls grow and they are patched up
+   to the new ceiling, so being rearmed reads as a reward rather than a
+   free full heal. */
+void AlliesUpgrade(void)
+{
+    float maxHp = AllyMaxHpForRank();
+
+    for (int i = 0; i < MAX_ALLIES; i++) {
+        Ally *a = &g.allies[i];
+        float gain = maxHp - a->maxHp;
+        if (gain < 0.0f) gain = 0.0f;
+
+        a->maxHp = maxHp;
+        if (a->alive) a->hp = fminf(maxHp, a->hp + gain + 8.0f);
+    }
+}
+
+/* The player's recall. Everyone drops what they are doing, sprints back and
+   holds station until the danger passes. */
+void AlliesRally(void)
+{
+    if (g.rallyCool > 0.0f) return;
+
+    int  alive[MAX_ALLIES], n = 0;
+    for (int i = 0; i < MAX_ALLIES; i++) {
+        Ally *a = &g.allies[i];
+        if (!a->alive || a->spawnFade > 0.0f) continue;
+        a->rallyTimer  = RALLY_TIME;
+        a->assistTimer = 0.0f;
+        alive[n++]     = i;
+    }
+    if (n == 0) return;
+
+    g.rallyCool = RALLY_COOLDOWN;
+
+    TextCopy(g.message, "RALLY - ON ME");
+    g.messageTimer = 1.4f;
+    PlaySfx(assets.pickup, 0.30f, 1.45f);
+
+    /* one of them answers, and it is always the cocky one if VEX is flying */
+    static const char *const kAck[ALLY_ROLE_COUNT] = {
+        "ON YOUR WING!", "CLOSING. HOLD ON.", "COMING! I'M COMING!"
+    };
+    int who = alive[GetRandomValue(0, n - 1)];
+    ChatSayText(who, kAck[g.allies[who].role]);
+}
+
 static void AllyShoot(Ally *a)
 {
     const AllyProfile *pr = AllyProfileOf(a->role);
@@ -829,7 +926,7 @@ static void AllyShoot(Ally *a)
     Vector2 muzzle = V2Add(a->pos, V2Scale(dir, 11.0f));
 
     SpawnBullet(muzzle, V2Scale(dir, ALLY_BULLET_SPD), TILE_BOLT,
-                ALLY_BULLET_DMG, 1.3f, 1.0f, BULLET_ALLY, a->slot);
+                ALLY_BULLET_DMG * AllyDamageMul(), 1.3f, 1.0f, BULLET_ALLY, a->slot);
     SpawnBurstParticles(muzzle, 0.18f, pr->hull);
 
     PlaySfx(assets.shoot, 0.10f, 1.35f);
@@ -855,8 +952,8 @@ void AllySpecial(Ally *a)
                 Vector2 d = V2(cosf(ang), sinf(ang));
                 SpawnBullet(V2Add(a->pos, V2Scale(d, 11.0f)),
                             V2Scale(d, ALLY_BULLET_SPD * 0.94f),
-                            TILE_BOLT, ALLY_BULLET_DMG * 0.7f, 0.85f, 0.9f,
-                            BULLET_ALLY, a->slot);
+                            TILE_BOLT, ALLY_BULLET_DMG * 0.7f * AllyDamageMul(),
+                            0.85f, 0.9f, BULLET_ALLY, a->slot);
             }
             SpawnBurstParticles(V2Add(a->pos, V2Scale(dir, 12.0f)), 0.4f, pr->hull);
             PlaySfx(assets.enemyShoot, 0.22f, 1.55f);
@@ -895,7 +992,8 @@ void AllySpecial(Ally *a)
                 Vector2 from = V2Add(V2Add(a->pos, V2Scale(dir, 9.0f)),
                                      V2Scale(side, 4.0f * (float)i));
                 SpawnBullet(from, V2Scale(dir, ALLY_BULLET_SPD * 1.15f), TILE_BOLT,
-                            ALLY_BULLET_DMG * 1.7f, 1.4f, 1.15f, BULLET_ALLY, a->slot);
+                            ALLY_BULLET_DMG * 1.7f * AllyDamageMul(), 1.4f, 1.15f,
+                            BULLET_ALLY, a->slot);
             }
             PlaySfx(assets.pickup, 0.28f, 1.25f);
             break;
@@ -911,8 +1009,8 @@ void AllySpecial(Ally *a)
                 Vector2 d = V2(cosf(ang), sinf(ang));
 
                 Bullet *b = SpawnBullet(from, V2Scale(d, 210.0f), TILE_BOLT,
-                                        ALLY_BULLET_DMG * 1.6f, 2.6f, 1.15f,
-                                        BULLET_ALLY, a->slot);
+                                        ALLY_BULLET_DMG * 1.6f * AllyDamageMul(),
+                                        2.6f, 1.15f, BULLET_ALLY, a->slot);
                 if (b) b->homing = 5.4f;
 
                 SpawnBurstParticles(from, 0.25f, pr->hull);
@@ -947,6 +1045,7 @@ void AlliesUpdate(float dt)
                 a->distress     = 0.0f;
                 a->helpCool     = 3.0f;
                 a->assistTimer  = 0.0f;
+                a->rallyTimer   = 0.0f;
                 SpawnBurst(a->pos, 0.7f);
 
                 static const char *const kBack[ALLY_ROLE_COUNT] = {
@@ -962,6 +1061,7 @@ void AlliesUpdate(float dt)
 
         /* --- beacon bookkeeping ---------------------------------------- */
         if (a->helpCool > 0.0f) a->helpCool -= dt;
+        if (a->rallyTimer > 0.0f) a->rallyTimer -= dt;
 
         if (a->distress > 0.0f) {
             a->distress -= dt;
@@ -1015,6 +1115,17 @@ void AlliesUpdate(float dt)
             }
         }
 
+        /* --- answering the player's recall ----------------------------- */
+        /* While the recall is up, nothing is worth chasing: they break off,
+           sprint back and hold station. That is the whole point of the
+           button - the wing arrives when it is called, not when the shooting
+           happens to stop. */
+        float maxSpeed = ALLY_MAX_SPEED;
+        if (a->rallyTimer > 0.0f) {
+            target   = NULL;
+            maxSpeed = ALLY_RALLY_SPEED;
+        }
+
         /* --- raise the alarm ------------------------------------------- */
         if (a->spawnFade <= 0.0f && a->distress <= 0.0f &&
             (a->hp < a->maxHp * 0.35f ||
@@ -1046,11 +1157,11 @@ void AlliesUpdate(float dt)
 
             /* close in when far away, back off when we are in its face */
             float stand  = target->radius + ALLY_STANDOFF + (float)i * 12.0f;
-            float radial = Clamp((d - stand) * 2.4f, -ALLY_MAX_SPEED, ALLY_MAX_SPEED);
+            float radial = Clamp((d - stand) * 2.4f, -maxSpeed, maxSpeed);
 
             /* a slow strafe keeps the three of them from forming a queue */
             Vector2 side   = V2(-dirLead.y, dirLead.x);
-            float   strafe = sinf(g.time * 1.25f + (float)i * 2.1f) * ALLY_MAX_SPEED * 0.38f;
+            float   strafe = sinf(g.time * 1.25f + (float)i * 2.1f) * maxSpeed * 0.38f;
 
             desiredVel = V2Add(V2Scale(dirLead, radial), V2Scale(side, strafe));
 
@@ -1062,22 +1173,22 @@ void AlliesUpdate(float dt)
                 float t = Clamp((homeDist - ALLY_LEASH) / 140.0f, 0.0f, 1.0f);
                 desiredVel = V2Add(V2Scale(desiredVel, 1.0f - t),
                                    V2Scale(V2Norm(V2Sub(home, a->pos)),
-                                           ALLY_MAX_SPEED * t));
+                                           maxSpeed * t));
             }
         } else {
             Vector2 toSlot = V2Sub(home, a->pos);
             float   d      = V2Len(toSlot);
-            desiredVel = V2Scale(V2Norm(toSlot), fminf(d * 3.2f, ALLY_MAX_SPEED));
+            desiredVel = V2Scale(V2Norm(toSlot), fminf(d * 3.2f, maxSpeed));
         }
 
         /* exponential approach to the desired velocity: snappy, no overshoot */
         a->vel = V2Add(a->vel,
                        V2Scale(V2Sub(desiredVel, a->vel), 1.0f - expf(-6.5f * dt)));
-        a->vel = V2ClampLen(a->vel, ALLY_MAX_SPEED);
+        a->vel = V2ClampLen(a->vel, maxSpeed);
         a->pos = V2Add(a->pos, V2Scale(a->vel, dt));
 
-        a->pos.x = Clamp(a->pos.x, 16.0f, WORLD_W - 16.0f);
-        a->pos.y = Clamp(a->pos.y, 16.0f, WORLD_H - 16.0f);
+        a->pos.x = Clamp(a->pos.x, -1.0e6f + 16.0f, 1.0e6f - 16.0f);
+        a->pos.y = Clamp(a->pos.y, -1.0e6f + 16.0f, 1.0e6f - 16.0f);
 
         /* --- teleport home if we get left far behind ------------------- */
         if (g.player.alive &&
@@ -1131,12 +1242,12 @@ void AlliesUpdate(float dt)
                     AllySpecial(a);
                     if (GetRandomValue(0, 4) == 0) ChatSayText(i, kCry[a->role]);
 
-                    a->specialTimer = pr->cooldown *
+                    a->specialTimer = pr->cooldown * AllyCoolMul() *
                                       (0.85f + (float)GetRandomValue(0, 30) / 100.0f);
-                    a->fireTimer    = ALLY_FIRE_TIME * 1.7f;
+                    a->fireTimer    = ALLY_FIRE_TIME * AllyFireMul() * 1.7f;
                 } else {
                     AllyShoot(a);
-                    a->fireTimer = ALLY_FIRE_TIME *
+                    a->fireTimer = ALLY_FIRE_TIME * AllyFireMul() *
                                    (0.85f + (float)GetRandomValue(0, 40) / 100.0f);
                 }
             }
@@ -1167,6 +1278,15 @@ void AlliesDraw(void)
         DrawShip(pr->ship, a->pos, a->angle * RAD2DEG + ART_FORWARD, 1.0f, tint);
 
         if (a->spawnFade > 0.0f) continue;
+
+        /* --- recall marker: a bright ring while they are sprinting home --- */
+        if (a->rallyTimer > 0.0f) {
+            float pulse = 0.5f + 0.5f * sinf(g.time * 14.0f);
+            DrawCircleLines((int)floorf(a->pos.x), (int)floorf(a->pos.y),
+                            12.0f + pulse * 5.0f,
+                            (Color){ 126, 226, 250,
+                                     (unsigned char)(80.0f + 130.0f * pulse) });
+        }
 
         /* --- distress beacon ------------------------------------------- */
         if (a->distress > 0.0f) {
@@ -1229,9 +1349,7 @@ void BulletsUpdate(float dt)
         b->life -= dt;
         b->pos   = V2Add(b->pos, V2Scale(b->vel, dt));
 
-        if (b->life <= 0.0f ||
-            b->pos.x < -20.0f || b->pos.y < -20.0f ||
-            b->pos.x > WORLD_W + 20.0f || b->pos.y > WORLD_H + 20.0f) {
+        if (b->life <= 0.0f) {
             b->alive = false;
             continue;
         }
@@ -1255,8 +1373,23 @@ void BulletsUpdate(float dt)
 
                 bool wasHeavy = (e->kind == ENEMY_HEAVY);
 
-                DamageEnemy(e, b->damage);
-                SpawnBurstParticles(b->pos, 0.28f, COL_FOAM);
+                /* Every so often a shot lands somewhere that really matters:
+                   it bites a lot harder and spits out a "CRIT" over the
+                   target, which is the difference between a stream of taps
+                   and a killing blow. */
+                bool  crit = (GetRandomValue(0, 99) < CRIT_CHANCE);
+                float dmg  = b->damage * (crit ? CRIT_MULT : 1.0f);
+
+                DamageEnemy(e, dmg);
+
+                if (crit) {
+                    g.crits++;
+                    SpawnBurstParticles(b->pos, 0.85f, (Color){ 255, 236, 159, 255 });
+                    SpawnPopup(e->pos, "CRIT", (Color){ 255, 236, 159, 255 });
+                    PlaySfx(assets.hit, 0.42f, 1.85f);
+                } else {
+                    SpawnBurstParticles(b->pos, 0.28f, COL_FOAM);
+                }
                 b->alive = false;
 
                 /* Kill chatter: the wingman who fired gets the credit, and the
@@ -1341,46 +1474,42 @@ void PickupsUpdate(float dt)
 
         p->vel = V2Scale(p->vel, 1.0f - fminf(1.0f, 2.5f * dt));
         p->pos = V2Add(p->pos, V2Scale(p->vel, dt));
-        p->pos.x = Clamp(p->pos.x, 10.0f, WORLD_W - 10.0f);
-        p->pos.y = Clamp(p->pos.y, 10.0f, WORLD_H - 10.0f);
 
         if (!g.player.alive) continue;
 
-        /* --- player collects first --- */
-        float pr = PLAYER_RADIUS + 10.0f;
-        if (Dist2(p->pos, g.player.pos) <= pr * pr) {
-            /* player gets it; fall through to apply effect below */
-        } else {
-            /* check wingmen: nearest alive wingman within 120px steals it */
-            for (int i = 0; i < MAX_ALLIES; i++) {
-                Ally *a = &g.allies[i];
-                if (!a->alive) continue;
-                float ar = ALLY_RADIUS + 30.0f;
-                if (Dist2(p->pos, a->pos) <= ar * ar) {
-                    /* apply the pickup effect to this wingman: HEAL -> HP,
-                       POWER -> faster reload, SHIELD -> heals too */
-                    switch (p->kind) {
-                        case PICK_HEALTH:
-                            a->hp = fminf(a->maxHp, a->hp + 35.0f);
-                            break;
-                        case PICK_POWER:
-                            a->hp = fminf(a->maxHp, a->hp + 8.0f);
-                            break;
-                        case PICK_SHIELD:
-                            a->hp = fminf(a->maxHp, a->hp + 12.0f);
-                            break;
-                        default: break;
-                    }
-                    a->hitFlash = 0.5f;
-                    goto pickup_consumed;
-                }
-            }
-            /* player missed it and no wingman close enough - despawn */
-            p->alive = false;
-            return;
-        }
+        /* --- who is actually reaching for it? --------------------------- */
+        /* The player has first call; failing that a wingman flying over it
+           takes it for themselves. A crate nobody is touching is left alone
+           on the map - that is the whole point of a supply drop. */
+        bool  playerHas = false;
+        Ally *allyHas   = NULL;
 
-pickup_consumed:
+        float pr = PLAYER_RADIUS + 13.0f;
+        if (Dist2(p->pos, g.player.pos) <= pr * pr) {
+            playerHas = true;
+        } else {
+            for (int k = 0; k < MAX_ALLIES; k++) {
+                Ally *a = &g.allies[k];
+                if (!a->alive || a->spawnFade > 0.0f) continue;
+
+                float ar = ALLY_RADIUS + 34.0f;
+                if (Dist2(p->pos, a->pos) <= ar * ar) { allyHas = a; break; }
+            }
+        }
+        if (!playerHas && !allyHas) continue;
+
+        if (allyHas) {
+            switch (p->kind) {
+                case PICK_HEALTH: allyHas->hp = fminf(allyHas->maxHp, allyHas->hp + 35.0f); break;
+                case PICK_POWER:  allyHas->hp = fminf(allyHas->maxHp, allyHas->hp + 10.0f); break;
+                case PICK_SHIELD: allyHas->hp = fminf(allyHas->maxHp, allyHas->hp + 14.0f); break;
+            }
+            allyHas->hitFlash = 0.5f;
+            p->alive = false;
+            SpawnBurstParticles(p->pos, 0.4f, COL_SHALLOW);
+            PlaySfx(assets.pickup, 0.22f, 1.35f);
+            continue;
+        }
 
         switch (p->kind) {
             case PICK_HEALTH:
@@ -1492,6 +1621,37 @@ void BurstsDraw(void)
 }
 
 /* --------------------------------------------------------------------------
+ *  Floating combat text
+ * ----------------------------------------------------------------------- */
+void PopupsUpdate(float dt)
+{
+    for (int i = 0; i < MAX_POPUPS; i++) {
+        Popup *p = &g.popups[i];
+        if (!p->alive) continue;
+
+        p->t += dt;
+        if (p->t >= p->life) { p->alive = false; continue; }
+
+        p->pos.y -= 22.0f * dt;   /* drifts up off the target */
+    }
+}
+
+void PopupsDraw(void)
+{
+    for (int i = 0; i < MAX_POPUPS; i++) {
+        Popup *p = &g.popups[i];
+        if (!p->alive) continue;
+
+        float k = p->t / p->life;
+        Color c = p->color;
+        c.a = (unsigned char)(255.0f * Clamp(1.0f - k * k, 0.0f, 1.0f));
+
+        DrawTextPixShadow(assets.font, p->text,
+                          V2(SnapPix(p->pos.x), SnapPix(p->pos.y)), 1, c);
+    }
+}
+
+/* --------------------------------------------------------------------------
  *  Waves
  * ----------------------------------------------------------------------- */
 void StartWave(int wave)
@@ -1499,25 +1659,62 @@ void StartWave(int wave)
     g.wave       = wave;
     g.difficulty = (float)(wave - 1);
 
-    int heavy  = (wave >= 3) ? (wave - 2) / 2 + 1 : 0;
-    int raider = (wave >= 2) ? wave / 2 + 1 : 0;
-    int scout  = 3 + wave;
+    /* The swarm grows a little faster than the wing does - a long run is
+       meant to end badly eventually - but it is a steady ramp, not a cliff,
+       and it keeps growing for as long as the player can stay alive. */
+    int heavy  = (wave >= 3) ? (wave - 1) / 2 : 0;
+    int raider = (wave >= 2) ? wave          : 0;
+    int scout  = 4 + wave + wave / 2;
 
-    g.waveHeavy  = (heavy  > 8)  ? 8  : heavy;
-    g.waveRaider = (raider > 16) ? 16 : raider;
-    g.waveScout  = (scout  > 22) ? 22 : scout;
+    g.waveHeavy  = (heavy  > 14) ? 14 : heavy;
+    g.waveRaider = (raider > 26) ? 26 : raider;
+    g.waveScout  = (scout  > 36) ? 36 : scout;
 
     g.wavePending = g.waveScout + g.waveRaider + g.waveHeavy;
     g.spawnTimer  = 1.2f;
 
+    /* Rearm the wing before the shooting starts. */
+    AlliesUpgrade();
+
     snprintf(g.message, sizeof g.message, "WAVE %d", wave);
     g.messageTimer = 2.2f;
 
-    /* somebody always has something to say about new company */
+    /* --- supply drop ------------------------------------------------- */
+    /* Crates land on the islands around the squadron at the top of every
+       wave, so there is something worth breaking formation for. Weapon and
+       hull crates are the common ones. */
+    int drops = 2 + wave / 3;
+    if (drops > 5) drops = 5;
+
+    for (int i = 0; i < drops; i++) {
+        Vector2 at   = ArenaRandomLandNear(g.player.pos, 90.0f, 360.0f);
+        int     roll = GetRandomValue(0, 99);
+
+        PickupKind kind = (roll < 45) ? PICK_POWER
+                        : (roll < 85) ? PICK_HEALTH
+                                      : PICK_SHIELD;
+        SpawnPickup(kind, at);
+    }
+
+    TraceLog(LOG_DEBUG, "WAVE %d: %d drops placed", wave, drops);
+
+    /* --- radio -------------------------------------------------------- */
     {
         int alive[MAX_ALLIES], n = 0;
         for (int i = 0; i < MAX_ALLIES; i++) if (g.allies[i].alive) alive[n++] = i;
-        if (n > 0) ChatSay(alive[GetRandomValue(0, n - 1)], CHAT_WAVE);
+        if (n == 0) return;
+
+        if (wave > 1 && (wave % 3) == 0) {
+            static const char *const kRearm[ALLY_ROLE_COUNT] = {
+                "NEW GUNS. NOW IT'S FAIR.",
+                "REARMED AND PATCHED. THANK YOU.",
+                "NEW PARTS! I FEEL FAST! MAYBE TOO FAST!"
+            };
+            int who = alive[GetRandomValue(0, n - 1)];
+            ChatSayText(who, kRearm[g.allies[who].role]);
+        } else {
+            ChatSay(alive[GetRandomValue(0, n - 1)], CHAT_WAVE);
+        }
     }
 }
 
@@ -1528,7 +1725,7 @@ void WaveSpawnStep(float dt)
     g.spawnTimer -= dt;
     if (g.spawnTimer > 0.0f) return;
 
-    g.spawnTimer = fmaxf(0.18f, 0.75f - g.difficulty * 0.03f);
+    g.spawnTimer = fmaxf(0.14f, 0.70f - g.difficulty * 0.035f);
 
     EnemyKind kind;
     int roll = GetRandomValue(0, g.waveScout + g.waveRaider + g.waveHeavy - 1);
@@ -1554,8 +1751,6 @@ void WaveSpawnStep(float dt)
 
         Vector2 candidate = V2(g.player.pos.x + cosf(angle) * r,
                                g.player.pos.y + sinf(angle) * r);
-        candidate.x = Clamp(candidate.x, 40.0f, WORLD_W - 40.0f);
-        candidate.y = Clamp(candidate.y, 40.0f, WORLD_H - 40.0f);
 
         pos = candidate;
         if (V2Len(V2Sub(candidate, g.player.pos)) > 165.0f) break;

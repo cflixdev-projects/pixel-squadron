@@ -20,6 +20,11 @@ InputState input = {0};
  *  Presentation state
  * ----------------------------------------------------------------------- */
 static RenderTexture2D target;
+static int     viewW        = BASE_W;
+static int     viewH        = BASE_H;
+int            gViewW       = BASE_W;
+int            gViewH       = BASE_H;
+
 static float   viewScale  = 2.0f;
 static Vector2 viewOffset = { 0, 0 };
 
@@ -59,20 +64,58 @@ static void SaveHighScore(void)
  *  framebuffer size, the arithmetic below is honest, and the blit lands on
  *  whole pixels with no DPI guesswork anywhere.
  * ----------------------------------------------------------------------- */
+
+/* Point the render target at a virtual screen of `w` x `h` pixels. The blit
+   is a whole-number zoom, so the picture is only ever resized by re-creating
+   the target - and only when the window has actually changed shape. */
+static void SetVirtualScreen(int w, int h)
+{
+    if (target.id != 0 && w == viewW && h == viewH) return;
+
+    if (target.id != 0) UnloadRenderTexture(target);
+
+    target = LoadRenderTexture(w, h);
+    SetTextureFilter(target.texture, TEXTURE_FILTER_POINT);
+
+    viewW  = w;
+    viewH  = h;
+    gViewW = w;
+    gViewH = h;
+
+    camera.offset = V2((float)w * 0.5f, (float)h * 0.5f);
+}
+
+/* Fit the virtual screen to the window.
+ *
+ * The zoom is a whole number chosen from the window's height, so a 1920x1080
+ * window gives exactly the 480x270 design and everything stays pixel-square.
+ * The virtual screen is then grown until it *covers* the window: the blit has
+ * no letterbox bars to sit in and nothing worth seeing is cropped - a taller
+ * or wider window simply reveals more of the world. */
 static void UpdateViewport(void)
 {
     float w = (float)GetScreenWidth();
     float h = (float)GetScreenHeight();
 
-    float s = fminf(w / RENDER_W, h / RENDER_H);
-    if (s >= 1.0f) s = floorf(s);   /* whole-number zoom keeps pixels square */
-    if (s < 0.05f) s = 0.05f;
+    int s = (int)floorf(h / (float)BASE_H + 0.5f);
+    if (s < 1) s = 1;
 
-    /* The offsets must be whole pixels too: a half-pixel here would land the
-       blit between two texels and smear the whole picture. */
-    viewScale  = s;
-    viewOffset = V2(floorf((w - RENDER_W * s) * 0.5f),
-                    floorf((h - RENDER_H * s) * 0.5f));
+    int vw = (int)ceilf(w / (float)s);
+    int vh = (int)ceilf(h / (float)s);
+
+    /* Keep the target sane on absurd window sizes, and inside the tile cache
+       the arena keeps for one frame. A minimum only ever reveals *more* of
+       the world, and guarantees the overlay still has room to lay itself
+       out. */
+    if (vw < 300) vw = 300;
+    if (vh < 200) vh = 200;
+    if (vw > 1440) vw = 1440;
+    if (vh > 900)  vh = 900;
+
+    viewScale  = (float)s;
+    viewOffset = V2(0.0f, 0.0f);
+
+    SetVirtualScreen(vw, vh);
 }
 
 /* Window coordinates -> the 480x270 space everything else thinks in. */
@@ -129,6 +172,9 @@ static void GatherInput(void)
     input.aim          = aim;
     input.firing       = firing;
     input.boost        = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
+    input.rally        = IsKeyPressed(KEY_Q) ||
+                         IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_TRIGGER_1) ||
+                         IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_FACE_DOWN);
     input.usingGamepad = gamepad;
     input.reticle      = mouseVirtual;
 }
@@ -148,8 +194,6 @@ static void AutoPilotInput(float dt)
     float   radius  = 210.0f;
     Vector2 desired = V2(centre.x + cosf(t * 0.45f) * radius,
                          centre.y + sinf(t * 0.45f) * radius);
-    desired.x = Clamp(desired.x, 80.0f, WORLD_W - 80.0f);
-    desired.y = Clamp(desired.y, 80.0f, WORLD_H - 80.0f);
     input.move = V2ClampLen(V2Scale(V2Sub(desired, g.player.pos), 0.05f), 1.0f);
 
     /* aim at the closest enemy that is actually in the fight, otherwise look
@@ -168,6 +212,8 @@ static void AutoPilotInput(float dt)
     input.firing = true;
     /* let the demo show off the boost every few seconds */
     input.boost  = fmodf(g.autoPilotTime, 7.0f) < 4.0f;
+    /* ...and call the wing back once a lap, so the recall gets exercised */
+    input.rally  = fmodf(g.autoPilotTime, 11.0f) < 0.02f;
     input.usingGamepad = true;   /* suppresses the mouse reticle */
     input.reticle = V2(RENDER_W * 0.5f, RENDER_H * 0.5f);
 }
@@ -190,9 +236,6 @@ static void UpdateGameCamera(float dt)
 {
     Vector2 lookAhead = V2Scale(g.player.vel, 0.22f);
     Vector2 want      = V2Add(g.player.pos, lookAhead);
-
-    want.x = Clamp(want.x, RENDER_W * 0.5f, WORLD_W - RENDER_W * 0.5f);
-    want.y = Clamp(want.y, RENDER_H * 0.5f, WORLD_H - RENDER_H * 0.5f);
 
     float k = 1.0f - expf(-9.0f * dt);
     cameraPos = V2Add(cameraPos, V2Scale(V2Sub(want, cameraPos), k));
@@ -257,6 +300,7 @@ static void StartNewRun(void)
 static void UpdatePlaying(float dt)
 {
     g.survived += dt;
+    if (g.rallyCool > 0.0f) g.rallyCool -= dt;
 
     /* hit-stop: freeze the simulation for a couple of frames on a big kill */
     float step = dt;
@@ -265,6 +309,9 @@ static void UpdatePlaying(float dt)
         step = dt * 0.15f;
     }
 
+    /* The recall is a player order, so it is read before the wing thinks. */
+    if (input.rally && g.player.alive) AlliesRally();
+
     PlayerUpdate(step);
     EnemiesUpdate(step);
     AlliesUpdate(step);
@@ -272,6 +319,7 @@ static void UpdatePlaying(float dt)
     PickupsUpdate(step);
     ParticlesUpdate(step);
     BurstsUpdate(step);
+    PopupsUpdate(step);
 
     if (g.player.alive) {
         if (g.wavePending > 0) {
@@ -321,41 +369,31 @@ static void DrawWorld(void)
     PlayerDraw();
     BurstsDraw();
     ParticlesDraw();
+    PopupsDraw();
 }
 
 static void DrawFrame(void)
 {
+    /* The virtual screen is re-fitted before anything is drawn into it, so a
+       window that changed shape this frame is already using the new target. */
+    UpdateViewport();
+
     BeginTextureMode(target);
     ClearBackground(COL_DEEP);
 
-    if (g.state == STATE_TITLE) {
-        /* slow pan over the land the next run will start on, plus a few idle
-           particles */
-        camera.target = V2(g.player.pos.x + sinf(g.timer * 0.11f) * 150.0f,
-                           g.player.pos.y + cosf(g.timer * 0.15f) * 90.0f);
-        camera.target.x = Clamp(camera.target.x, RENDER_W * 0.5f, WORLD_W - RENDER_W * 0.5f);
-        camera.target.y = Clamp(camera.target.y, RENDER_H * 0.5f, WORLD_H - RENDER_H * 0.5f);
-        BeginMode2D(camera);
-        ArenaDraw(camera);
-        EndMode2D();
-        HudDrawTitle();
-    } else {
-        BeginMode2D(camera);
-        DrawWorld();
-        EndMode2D();
+    BeginMode2D(camera);
+    DrawWorld();
+    EndMode2D();
 
-        switch (g.state) {
-            case STATE_PAUSED:   HudDrawPause();    break;
-            case STATE_GAMEOVER: HudDrawGameOver(); break;
-            default:             HudDraw(camera);   ChatDraw(); break;
-        }
+    switch (g.state) {
+        case STATE_PAUSED:   HudDrawPause();    break;
+        case STATE_GAMEOVER: HudDrawGameOver(); break;
+        default:             HudDraw(camera);   ChatDraw(); break;
     }
 
     EndTextureMode();
 
-    /* blit the virtual screen, letterboxed and pixel-aligned */
-    UpdateViewport();
-
+    /* blit the virtual screen, filling the window exactly */
     BeginDrawing();
     ClearBackground((Color){ 8, 12, 18, 255 });
 
@@ -373,36 +411,42 @@ static void DrawFrame(void)
 #define START_CENTER     (1 << 0)
 #define START_FULLSCREEN (1 << 1)
 
-/* The window is always sized so that its framebuffer is an exact whole
-   multiple of the 480x270 virtual screen. Otherwise the integer zoom factor
-   cannot fill the window and black letterbox bars appear everywhere, even
-   though the aspect ratio matches. */
+/* The window is opened at a whole-number multiple of the design size, so at
+   1080p the picture is exactly the 480x270 design scaled 3x. Any other window
+   shape is fine too - the viewport simply reveals more of the world - this is
+   just the nicest place to start. Desktop only: on the web the canvas belongs
+   to the page, and raylib's own resize callback keeps it pinned to the
+   viewport instead. */
+#if !defined(__EMSCRIPTEN__)
 static void FitWindowToIntegerScale(int flags)
 {
     int monW = GetMonitorWidth(GetCurrentMonitor());
     int monH = GetMonitorHeight(GetCurrentMonitor());
 
     if (monW <= 0 || monH <= 0) {          /* no monitor info, keep what we have */
-        monW = RENDER_W * 4;
-        monH = RENDER_H * 4;
+        monW = BASE_W * 4;
+        monH = BASE_H * 4;
     }
 
     int n = 8;
-    while (n > 1 && (RENDER_W * n > (int)(monW * 0.92f) ||
-                     RENDER_H * n > (int)(monH * 0.92f))) n--;
+    while (n > 1 && (BASE_W * n > (int)(monW * 0.92f) ||
+                     BASE_H * n > (int)(monH * 0.92f))) n--;
 
-    SetWindowSize(RENDER_W * n, RENDER_H * n);
+    SetWindowSize(BASE_W * n, BASE_H * n);
 
     if (flags & START_CENTER) {
-        SetWindowPosition((monW - RENDER_W * n) / 2, (monH - RENDER_H * n) / 2);
+        SetWindowPosition((monW - BASE_W * n) / 2, (monH - BASE_H * n) / 2);
     }
 }
+#endif
 
 /* "Fullscreen" is a borderless window covering the monitor rather than a real
    video-mode switch. raylib's fullscreen path letterboxes its own viewport
    when the display aspect does not match the requested one, and it keeps that
    offset internal - our blit cannot see it, so the picture ends up cropped.
-   A borderless window keeps the framebuffer identical to the windowed case. */
+   A borderless window keeps the framebuffer identical to the windowed case.
+   Not needed on the web, where the canvas already fills the page. */
+#if !defined(__EMSCRIPTEN__)
 static bool    fullscreenOn = false;
 static Vector2 windowedPos  = { 0, 0 };
 static int     windowedW    = 0, windowedH = 0;
@@ -435,13 +479,16 @@ static void SetFullscreen(bool on)
 
     fullscreenOn = on;
 }
+#endif
 
 /* --------------------------------------------------------------------------
  *  Global keys
  * ----------------------------------------------------------------------- */
 static void HandleGlobalKeys(void)
 {
+#if !defined(__EMSCRIPTEN__)
     if (IsKeyPressed(KEY_F11)) SetFullscreen(!fullscreenOn);
+#endif
 
     if (IsKeyPressed(KEY_M)) {
         muted = !muted;
@@ -456,14 +503,6 @@ static void HandleGlobalKeys(void)
     if (IsKeyPressed(KEY_F12)) TakeScreenshot("pixel_squadron.png");
 
     switch (g.state) {
-        case STATE_TITLE:
-            if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER) ||
-                IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_FACE_DOWN)) {
-                StartNewRun();
-            }
-            if (IsKeyPressed(KEY_ESCAPE)) wantQuit = true;
-            break;
-
         case STATE_PLAY:
             if (IsKeyPressed(KEY_P) || IsKeyPressed(KEY_ESCAPE) ||
                 IsGamepadButtonPressed(0, GAMEPAD_BUTTON_MIDDLE_RIGHT)) {
@@ -472,12 +511,9 @@ static void HandleGlobalKeys(void)
             break;
 
         case STATE_PAUSED:
-            if (IsKeyPressed(KEY_P) || IsKeyPressed(KEY_ENTER) ||
+            if (IsKeyPressed(KEY_P) || IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_ENTER) ||
                 IsGamepadButtonPressed(0, GAMEPAD_BUTTON_MIDDLE_RIGHT)) {
                 g.state = STATE_PLAY;
-            }
-            if (IsKeyPressed(KEY_ESCAPE)) {
-                g.state = STATE_TITLE;
             }
             break;
 
@@ -486,10 +522,10 @@ static void HandleGlobalKeys(void)
                 IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_FACE_DOWN)) {
                 StartNewRun();
             }
-            if (IsKeyPressed(KEY_ESCAPE)) {
-                g.state = STATE_TITLE;
-            }
+            if (IsKeyPressed(KEY_ESCAPE)) wantQuit = true;
             break;
+
+        default: break;
     }
 }
 
@@ -501,9 +537,10 @@ int main(int argc, char **argv)
     float demoSeconds = 0.0f;
     const char *shotPath = NULL;
     unsigned seed = 0;
-    bool captureTitle = false;
-    float captureTime = 0.0f;
+    bool endCard = false;
+#if !defined(__EMSCRIPTEN__)
     int startFlags = START_CENTER | START_FULLSCREEN;   /* play big by default */
+#endif
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--demo") == 0 && i + 1 < argc) {
             demoSeconds = (float)atof(argv[++i]);
@@ -511,22 +548,25 @@ int main(int argc, char **argv)
             shotPath = argv[++i];
         } else if (strcmp(argv[i], "--seed") == 0 && i + 1 < argc) {
             seed = (unsigned)strtoul(argv[++i], NULL, 10);
-        } else if (strcmp(argv[i], "--title") == 0) {
-            captureTitle = true;
+#if !defined(__EMSCRIPTEN__)
         } else if (strcmp(argv[i], "--fullscreen") == 0) {
             startFlags |= START_FULLSCREEN;
         } else if (strcmp(argv[i], "--windowed") == 0) {
             startFlags &= ~START_FULLSCREEN;
+#endif
+        } else if (strcmp(argv[i], "--endcard") == 0) {
+            endCard = true;      /* dev: screenshot the end-of-run report */
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             printf("Pixel Squadron\n"
                    "  --seed N          start from a specific terrain seed\n"
                    "  --demo SECONDS    play itself, then screenshot and quit\n"
                    "  --shot FILE       where the demo writes its screenshot\n"
-                   "  --title           demo the title screen instead of gameplay\n"
+                   "  --endcard         dev: jump straight to the end-of-run report\n"
                    "  --windowed        start in a window (default is fullscreen)\n"
                    "  --fullscreen      force fullscreen\n"
                    "\n"
-                   "  F11 toggles fullscreen at any time.\n"
+                   "  F11 toggles fullscreen      F12 saves a screenshot\n"
+                   "  Q   recall the wing to you\n"
                    "  VEX/JUNO/BIT fly your wing: each has a special weapon, and\n"
                    "  they talk. Answer a red ! on the map to bail one out.\n");
             return 0;
@@ -538,8 +578,19 @@ int main(int argc, char **argv)
        scaled matrix while its framebuffer bookkeeping can go stale after a
        resize - which is what crops the right edge of the picture. Without it
        the window, the framebuffer and our blit all agree, pixel for pixel. */
+#if defined(__EMSCRIPTEN__)
+    /* On the web the canvas *is* the window, and raylib/GLFW will happily
+       resize it to a monitor-sized slab (which a fixed-aspect CSS canvas then
+       letterboxes inside the viewport - the black bars). Leaving
+       FLAG_WINDOW_RESIZABLE set hands that sizing to raylib's own resize
+       callback, which pins the canvas to the browser viewport, and there is no
+       monitor to fit or to take over either: the browser owns fullscreen. */
+    SetConfigFlags(FLAG_VSYNC_HINT | FLAG_MSAA_4X_HINT | FLAG_WINDOW_RESIZABLE);
+    InitWindow(BASE_W * 3, BASE_H * 3, "Pixel Squadron - raylib twin-stick shooter");
+    InitAudioDevice();
+#else
     SetConfigFlags(FLAG_VSYNC_HINT | FLAG_MSAA_4X_HINT);
-    InitWindow(RENDER_W * 3, RENDER_H * 3, "Pixel Squadron - raylib twin-stick shooter");
+    InitWindow(BASE_W * 3, BASE_H * 3, "Pixel Squadron - raylib twin-stick shooter");
     InitAudioDevice();
 
     /* A headless demo should not hijack the desktop. */
@@ -547,6 +598,7 @@ int main(int argc, char **argv)
 
     FitWindowToIntegerScale(startFlags);
     if (startFlags & START_FULLSCREEN) SetFullscreen(true);
+#endif
 
     SetExitKey(KEY_NULL);          /* we handle Escape ourselves */
     SetTargetFPS(60);
@@ -555,34 +607,39 @@ int main(int argc, char **argv)
     LoadHighScore();
     AssetsLoad();
 
-    target = LoadRenderTexture(RENDER_W, RENDER_H);
-    SetTextureFilter(target.texture, TEXTURE_FILTER_POINT);
-
     camera = (Camera2D){
-        .offset   = V2(RENDER_W * 0.5f, RENDER_H * 0.5f),
-        .target   = V2(WORLD_W * 0.5f, WORLD_H * 0.5f),
+        .offset   = V2(BASE_W * 0.5f, BASE_H * 0.5f),
+        .target   = V2(0.0f, 0.0f),
         .rotation = 0.0f,
         .zoom     = 1.0f,
     };
+
+    SetVirtualScreen(BASE_W, BASE_H);
     cameraPos = camera.target;
 
-    ArenaGenerate(seed ? seed : 1337u);
-    EntitiesReset();
-    g.state = STATE_TITLE;
+    /* Straight into the action: the game opens on a live run rather than a
+       title card, so the first thing anyone sees is the squadron flying. */
+    StartNewRun();
 
-    bool capturing = (demoSeconds > 0.0f);
-
-    if (capturing && !captureTitle) {
-        StartNewRun();
-        g.autoPilot = true;
+    /* Dev aid: jump to the end-of-run report with a plausible run behind it,
+       so the layout can be checked without playing for ten minutes first. */
+    if (endCard) {
+        g.score    = 48250;
+        g.kills    = 137;
+        g.crits    = 41;
+        g.wave     = 12;
+        g.survived = 371.0f;
+        g.highScore = 60000;
+        g.state    = STATE_GAMEOVER;
     }
+
+    if (demoSeconds > 0.0f) g.autoPilot = true;
 
     while (!WindowShouldClose() && !wantQuit) {
         float dt = fminf(GetFrameTime(), 0.05f);
         g.timer += dt;
 
-        if (g.state != STATE_TITLE) HandleGlobalKeys();
-        else HandleGlobalKeys();
+        HandleGlobalKeys();
 
         if (g.damageFlash > 0.0f) g.damageFlash -= dt * 3.0f;
         if (g.shake > 0.0f)       g.shake       -= dt * 26.0f;
@@ -596,8 +653,6 @@ int main(int argc, char **argv)
             UpdateGameCamera(dt);
             UpdatePlaying(dt);
             ChatUpdate(dt);
-        } else if (g.state == STATE_TITLE) {
-            UpdateViewport();
         }
 
         /* looping engine hum, louder the faster we fly */
@@ -614,18 +669,15 @@ int main(int argc, char **argv)
 
         if (g.autoPilot && g.autoPilotTime >= demoSeconds) {
             CaptureVirtualScreen(shotPath ? shotPath : "pixel_squadron.png");
-            TraceLog(LOG_INFO, "DEMO: captured after %.1fs (score %d, wave %d)",
-                     g.autoPilotTime, g.score, g.wave);
+            TraceLog(LOG_INFO, "DEMO: captured after %.1fs (score %d, wave %d, kills %d, crits %d)",
+                     g.autoPilotTime, g.score, g.wave, g.kills, g.crits);
             break;
         }
 
-        if (capturing && captureTitle) {
-            captureTime += dt;
-            if (captureTime >= demoSeconds) {
-                CaptureVirtualScreen(shotPath ? shotPath : "pixel_squadron.png");
-                TraceLog(LOG_INFO, "DEMO: captured title screen");
-                break;
-            }
+        if (endCard && g.timer >= demoSeconds) {
+            CaptureVirtualScreen(shotPath ? shotPath : "pixel_squadron.png");
+            TraceLog(LOG_INFO, "DEMO: captured end card");
+            break;
         }
     }
 
