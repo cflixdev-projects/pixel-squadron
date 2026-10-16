@@ -392,10 +392,10 @@ void HudDraw(Camera2D cam)
            shots fly down the ray from the nose through this pixel, so whatever
            the middle of the box is over is what gets hit. The box is an odd
            size on purpose, so its centre pixel *is* the aim point. */
-        Color box = (p->quadTimer   > 0.0f) ? (Color){ 198, 150, 255, 190 }
-                  : (p->spreadTimer > 0.0f) ? (Color){ 255, 186,  92, 190 }
-                  : (p->homingTimer > 0.0f) ? (Color){ 140, 235, 150, 190 }
-                                            : (Color){ 223, 246, 245, 120 };
+        Color box = (p->quadTimer   > 0.0f) ? (Color){ 198, 150, 255, 230 }
+                  : (p->spreadTimer > 0.0f) ? (Color){ 255, 186,  92, 230 }
+                  : (p->homingTimer > 0.0f) ? (Color){ 140, 235, 150, 230 }
+                                            : (Color){ 100, 210, 255, 235 };
 
         int cx = (int)floorf(aimAt.x);
         int cy = (int)floorf(aimAt.y);
