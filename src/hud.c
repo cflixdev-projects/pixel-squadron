@@ -593,7 +593,7 @@ void HudDrawPause(void)
         } else {
             DrawTextCentered("W / S  -  CHOOSE    ENTER  -  REBIND",
                              centre + 44, 1, assets.font, prompt);
-            DrawTextCentered("R  -  DEFAULTS      C / ESC  -  DONE",
+            DrawTextCentered("R  -  DEFAULTS      C / ESC / START  -  DONE",
                              centre + 58, 1, assets.font, (Color){ 126, 226, 250, 160 });
         }
         return;

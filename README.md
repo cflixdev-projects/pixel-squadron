@@ -89,10 +89,9 @@ obvious where the guns are pointed. Pushing the right stick aims and opens
 fire; moving the mouse takes the aim straight back, so both hands work and
 neither steals the crosshair from the other.
 
-The pause menu's **pad controls** panel (`C`) rebinds fire, boost, recall and
-the ultimate to any pad button; `R` there restores the defaults. The keyboard
-is not remappable - there are enough keys that the defaults are never in the
-way.
+The pause menu's **pad controls** panel (`C`) rebinds fire, boost, recall and the ultimate to any pad button; `R` there restores the defaults and
+`Esc` / `C` / `Start` closes it. The keyboard is not remappable - there are
+enough keys that the defaults are never in the way.
 
 ## Building (desktop)
 

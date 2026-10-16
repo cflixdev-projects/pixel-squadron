@@ -210,7 +210,10 @@ static bool RemapPanelKeys(void)
                 break;
             }
         }
-        if (IsKeyPressed(KEY_ESCAPE)) remapArmed = false;
+        if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_C) ||
+            IsGamepadButtonPressed(0, GAMEPAD_BUTTON_MIDDLE_RIGHT)) {
+            remapArmed = false;
+        }
         return true;
     }
 
@@ -230,7 +233,8 @@ static bool RemapPanelKeys(void)
         BindsLoadDefaults();
         BindsSave();
     }
-    if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_C)) {
+    if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_C) ||
+        IsGamepadButtonPressed(0, GAMEPAD_BUTTON_MIDDLE_RIGHT)) {
         remapActive = false;
         BindsSave();
     }
