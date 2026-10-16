@@ -1018,6 +1018,15 @@ int main(int argc, char **argv)
 
         if (g.autoPilot && g.state == STATE_PLAY) AutoPilotInput(dt);
         else if (g.state == STATE_PLAY)           GatherInput();
+#if defined(__EMSCRIPTEN__)
+        if (g.state == STATE_PLAY) {
+            EM_ASM({
+                var dbg = document.getElementById('debug');
+                if (dbg) dbg.textContent = 'jsMouse:' + window.__mx + ',' + window.__my +
+                    ' | reticle:' + $0 + ',' + $1 + ' aim:' + $2.toFixed(2) + ',' + $3.toFixed(2) + ' pad:' + $4;
+            }, (int)input.reticle.x, (int)input.reticle.y, input.aim.x, input.aim.y, input.usingGamepad);
+        }
+#endif
         else                                      input = (InputState){ 0 };
 
         /* The game draws its own crosshair on the aim point, so the OS arrow
