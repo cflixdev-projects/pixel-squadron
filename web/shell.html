@@ -59,17 +59,47 @@
     var msgEl     = document.getElementById('msg');
     var barEl     = document.getElementById('prog');
     var canvasEl  = document.getElementById('canvas');
-  window.__mx = -1; window.__my = -1; window.__moved = 0;
+  window.__mx = 240; window.__my = 135; window.__moved = 0;
+  var __locked = false;
+  var __mx = 240, __my = 135;
+
   function trackMouse(e) {
-    var r = canvasEl.getBoundingClientRect();
-    // Report in VIRTUAL space (0..480, 0..270) so the C side does not
-    // have to guess the canvas/backing-store scale.
-    var vx = (e.clientX - r.left) * (480.0 / r.width);
-    var vy = (e.clientY - r.top)  * (270.0 / r.height);
-    window.__mx = vx; window.__my = vy; window.__moved++;
+    if (__locked) {
+      // Pointer lock: relative movement, accumulated and clamped.
+      var cw = canvasEl.clientWidth  || 480;
+      var ch = canvasEl.clientHeight || 270;
+      __mx += e.movementX * (480.0 / cw);
+      __my += e.movementY * (270.0 / ch);
+      if (__mx < 0) __mx = 0; if (__mx > 480) __mx = 480;
+      if (__my < 0) __my = 0; if (__my > 270) __my = 270;
+    } else {
+      var r = canvasEl.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) {
+        __mx = (e.clientX - r.left) * (480.0 / r.width);
+        __my = (e.clientY - r.top)  * (270.0 / r.height);
+      }
+    }
+    window.__mx = __mx; window.__my = __my; window.__moved++;
     var dbg = document.getElementById('debug');
-    if (dbg) dbg.textContent = 'jsMouse: ' + Math.round(vx) + ',' + Math.round(vy);
+    if (dbg) dbg.textContent = 'jsMouse: ' + Math.round(__mx) + ',' + Math.round(__my) + ' locked:' + __locked;
   }
+
+  // Request pointer lock on click during play so the mouse stays in the window.
+  canvasEl.addEventListener('mousedown', function() {
+    if (!__locked && canvasEl.requestPointerLock) {
+      canvasEl.requestPointerLock();
+    }
+  });
+
+  document.addEventListener('pointerlockchange', function() {
+    __locked = (document.pointerLockElement === canvasEl);
+    if (__locked) {
+      canvasEl.style.cursor = 'none';
+    } else {
+      canvasEl.style.cursor = 'crosshair';
+    }
+  });
+
   window.addEventListener('mousemove', trackMouse, true);
   canvasEl.addEventListener('mousemove', trackMouse, true);
 
