@@ -567,6 +567,12 @@ static void StartNewRun(void)
 
     StartWave(1);
     g.state = STATE_PLAY;
+#if defined(__EMSCRIPTEN__)
+    EM_ASM({ if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+        var el = document.getElementById('canvas');
+        (el.requestFullscreen || el.webkitRequestFullscreen || function(){}).call(el);
+    } });
+#endif
 }
 
 static void UpdatePlaying(float dt)
@@ -877,6 +883,7 @@ int main(int argc, char **argv)
     bool titleCard = false;
     int  forceBiome = -1;
     int  wingUp = -1;
+    int  fpsCap = 0;  /* 0 = uncapped */
     bool mouseTest = false;
 #if !defined(__EMSCRIPTEN__)
     int startFlags = START_CENTER | START_FULLSCREEN;   /* play big by default */
@@ -902,6 +909,8 @@ int main(int argc, char **argv)
             forceBiome = atoi(argv[++i]);   /* dev: pin the world to one biome */
         } else if (strcmp(argv[i], "--wingup") == 0 && i + 1 < argc) {
             wingUp = atoi(argv[++i]);       /* dev: show the wing rearm banner */
+        } else if (strcmp(argv[i], "--fps") == 0 && i + 1 < argc) {
+            fpsCap = atoi(argv[++i]);       /* 0 = uncapped */
         } else if (strcmp(argv[i], "--mousetest") == 0) {
             mouseTest = true;              /* dev: scripted mouse, log aim */
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
@@ -953,7 +962,7 @@ int main(int argc, char **argv)
 #endif
 
     SetExitKey(KEY_NULL);          /* we handle Escape ourselves */
-    SetTargetFPS(60);
+    SetTargetFPS(fpsCap);  /* 0 = uncapped */
     SetRandomSeed(seed ? seed : (unsigned)time(NULL));
     ArenaForceBiome(forceBiome);   /* no-op unless --biome was passed */
 

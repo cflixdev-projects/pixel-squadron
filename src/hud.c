@@ -388,6 +388,21 @@ void HudDraw(Camera2D cam)
             aimAt = WorldToScreen(V2Add(p->pos, V2Scale(ray, 54.0f)));
         }
 
+        /* Beige halo + star outburst so the aim point reads against any
+           background. Drawn first, behind the box. */
+        {
+            float pulse = 0.5f + 0.5f * sinf(g.timer * 3.0f);
+            DrawCircleV(aimAt, 16.0f + pulse * 3.0f, (Color){ 245, 220, 170, 35 });
+            DrawCircleV(aimAt, 11.0f + pulse * 2.0f, (Color){ 245, 220, 170, 55 });
+            for (int i = 0; i < 8; i++) {
+                float ang = (float)i * 45.0f * DEG2RAD;
+                float len = (i % 2 == 0) ? 14.0f : 9.0f;
+                Vector2 tip = V2Add(aimAt, V2(cosf(ang) * len, sinf(ang) * len));
+                DrawLineEx(aimAt, tip, 1.5f, (Color){ 245, 220, 170, (unsigned char)(120 + 60 * pulse) });
+            }
+            DrawCircleV(aimAt, 2.5f, (Color){ 255, 245, 220, 220 });
+        }
+
         /* The crosshair sits exactly on the point the guns are aimed at: the
            shots fly down the ray from the nose through this pixel, so whatever
            the middle of the box is over is what gets hit. The box is an odd
@@ -402,6 +417,15 @@ void HudDraw(Camera2D cam)
 
         DrawRectangleLines(cx - 6, cy - 6, 13, 13, box);
         DrawRectangle(cx - 1, cy - 1, 3, 3, (Color){ 255, 130, 140, 210 });
+    }
+
+    /* --- fps counter, bottom right ------------------------------------ */
+    {
+        char fpsBuf[16];
+        snprintf(fpsBuf, sizeof fpsBuf, "%d FPS", GetFPS());
+        float fw = TextWidthPix(assets.font, fpsBuf, 1);
+        DrawTextPix(assets.font, fpsBuf, V2(RENDER_W - fw - 4.0f, RENDER_H - 11.0f), 1,
+                    (Color){ 120, 150, 170, 140 });
     }
 
     /* --- damage vignette ---------------------------------------------- */
