@@ -384,48 +384,32 @@ void HudDraw(Camera2D cam)
 
         if (input.usingGamepad) {
             Vector2 ray = (V2Len(input.aim) > 0.01f) ? input.aim
-                                                     : V2(cosf(p->angle), sinf(p->angle));
+                                                      : V2(cosf(p->angle), sinf(p->angle));
             aimAt = WorldToScreen(V2Add(p->pos, V2Scale(ray, 54.0f)));
         }
 
-        /* Beige halo + star outburst so the aim point reads against any
-           background. Drawn first, behind the box. */
+        /* Warm halo + star outburst, kept compact so it reads as a sight. */
         {
-            float pulse = 0.5f + 0.5f * sinf(g.timer * 3.0f);
-            DrawCircleV(aimAt, 16.0f + pulse * 3.0f, (Color){ 245, 220, 170, 35 });
-            DrawCircleV(aimAt, 11.0f + pulse * 2.0f, (Color){ 245, 220, 170, 55 });
+            float pulse = 0.5f + 0.5f * sinf(g.timer * 4.0f);
+            /* soft warm glow */
+            DrawCircleV(aimAt, 9.0f + pulse * 2.0f, (Color){ 245, 200, 140, 30 });
+            DrawCircleV(aimAt, 6.0f + pulse * 1.0f, (Color){ 245, 200, 140, 50 });
+            /* star outburst: 4 long rays + 4 short diagonals */
             for (int i = 0; i < 8; i++) {
                 float ang = (float)i * 45.0f * DEG2RAD;
-                float len = (i % 2 == 0) ? 14.0f : 9.0f;
+                float len = (i % 2 == 0) ? 10.0f : 6.0f;
                 Vector2 tip = V2Add(aimAt, V2(cosf(ang) * len, sinf(ang) * len));
-                DrawLineEx(aimAt, tip, 1.5f, (Color){ 245, 220, 170, (unsigned char)(120 + 60 * pulse) });
+                DrawLineEx(aimAt, tip, 1.2f, (Color){ 245, 200, 140, (unsigned char)(140 + 60 * pulse) });
             }
-            DrawCircleV(aimAt, 2.5f, (Color){ 255, 245, 220, 220 });
+            /* crosshair ticks */
+            DrawLineEx(V2(aimAt.x - 4, aimAt.y), V2(aimAt.x - 10, aimAt.y), 1.0f, (Color){ 255, 240, 210, 180 });
+            DrawLineEx(V2(aimAt.x + 4, aimAt.y), V2(aimAt.x + 10, aimAt.y), 1.0f, (Color){ 255, 240, 210, 180 });
+            DrawLineEx(V2(aimAt.x, aimAt.y - 4), V2(aimAt.x, aimAt.y - 10), 1.0f, (Color){ 255, 240, 210, 180 });
+            DrawLineEx(V2(aimAt.x, aimAt.y + 4), V2(aimAt.x, aimAt.y + 10), 1.0f, (Color){ 255, 240, 210, 180 });
+            /* bright red center dot */
+            DrawCircleV(aimAt, 2.0f, (Color){ 255, 80, 60, 240 });
+            DrawCircleV(aimAt, 1.0f, (Color){ 255, 200, 180, 255 });
         }
-
-        /* The crosshair sits exactly on the point the guns are aimed at: the
-           shots fly down the ray from the nose through this pixel, so whatever
-           the middle of the box is over is what gets hit. The box is an odd
-           size on purpose, so its centre pixel *is* the aim point. */
-        Color box = (p->quadTimer   > 0.0f) ? (Color){ 198, 150, 255, 230 }
-                  : (p->spreadTimer > 0.0f) ? (Color){ 255, 186,  92, 230 }
-                  : (p->homingTimer > 0.0f) ? (Color){ 140, 235, 150, 230 }
-                                            : (Color){ 100, 210, 255, 235 };
-
-        int cx = (int)floorf(aimAt.x);
-        int cy = (int)floorf(aimAt.y);
-
-        DrawRectangleLines(cx - 6, cy - 6, 13, 13, box);
-        DrawRectangle(cx - 1, cy - 1, 3, 3, (Color){ 255, 130, 140, 210 });
-    }
-
-    /* --- fps counter, bottom right ------------------------------------ */
-    {
-        char fpsBuf[16];
-        snprintf(fpsBuf, sizeof fpsBuf, "%d FPS", GetFPS());
-        float fw = TextWidthPix(assets.font, fpsBuf, 1);
-        DrawTextPix(assets.font, fpsBuf, V2(RENDER_W - fw - 4.0f, RENDER_H - 11.0f), 1,
-                    (Color){ 120, 150, 170, 140 });
     }
 
     /* --- damage vignette ---------------------------------------------- */
