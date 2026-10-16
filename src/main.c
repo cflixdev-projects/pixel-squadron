@@ -392,7 +392,7 @@ static void GatherInput(void)
     }
 
     if (!padMode) {
-        Vector2 mouseWorld = GetScreenToWorld2D(mouseVirtual, camera);
+        Vector2 mouseWorld = GetScreenToWorld2D(GetMousePosition(), camera);
         Vector2 toMouse    = V2Sub(mouseWorld, g.player.pos);
         if (V2Len(toMouse) > 1.0f) aim = V2Norm(toMouse);
     }
@@ -825,6 +825,7 @@ int main(int argc, char **argv)
     bool titleCard = false;
     int  forceBiome = -1;
     int  wingUp = -1;
+    bool mouseTest = false;
 #if !defined(__EMSCRIPTEN__)
     int startFlags = START_CENTER | START_FULLSCREEN;   /* play big by default */
 #endif
@@ -849,6 +850,8 @@ int main(int argc, char **argv)
             forceBiome = atoi(argv[++i]);   /* dev: pin the world to one biome */
         } else if (strcmp(argv[i], "--wingup") == 0 && i + 1 < argc) {
             wingUp = atoi(argv[++i]);       /* dev: show the wing rearm banner */
+        } else if (strcmp(argv[i], "--mousetest") == 0) {
+            mouseTest = true;              /* dev: scripted mouse, log aim */
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             printf("Pixel Squadron\n"
                    "  --seed N          start from a specific terrain seed\n"
@@ -922,7 +925,8 @@ int main(int argc, char **argv)
 
     /* Open on the title card - the land the run will start on drifts past
        behind it - unless a dev flag wants to be in the fight immediately. */
-    if (demoSeconds <= 0.0f) g.state = STATE_TITLE;
+    if (demoSeconds <= 0.0f && !mouseTest) g.state = STATE_TITLE;
+    if (mouseTest) g.state = STATE_PLAY;
 
     /* Dev aid: jump to the end-of-run report with a plausible run behind it,
        so the layout can be checked without playing for ten minutes first. */
@@ -937,6 +941,11 @@ int main(int argc, char **argv)
     }
 
     if (demoSeconds > 0.0f) g.autoPilot = true;
+    if (mouseTest) { g.autoPilot = false;
+#if !defined(__EMSCRIPTEN__)
+        startFlags &= ~START_FULLSCREEN;
+#endif
+    }
 
     /* Dev aid: hold the wing-rearm banner on screen so it can be eyeballed. */
     if (wingUp >= 0) {
@@ -995,6 +1004,30 @@ int main(int argc, char **argv)
             UpdateGameCamera(dt);
             UpdatePlaying(dt);
             ChatUpdate(dt);
+        }
+
+        /* Dev: scripted mouse, so the aim pipeline can be exercised without a
+           hand on the device. Moves the cursor to a known spot, then logs what
+           the game actually saw. */
+        if (mouseTest) {
+            static float mt = 0.0f;
+            mt += dt;
+            int phase = (int)(mt * 2.0f) % 4;
+            Vector2 target = (phase == 0) ? V2(120.0f, 90.0f)
+                          : (phase == 1) ? V2(400.0f, 200.0f)
+                          : (phase == 2) ? V2(240.0f, 135.0f)
+                                         : V2( 60.0f, 220.0f);
+            SetMousePosition((int)target.x, (int)target.y);
+
+            static float logt = 0.0f;
+            logt += dt;
+            if (logt >= 0.4f) {
+                logt = 0.0f;
+                Vector2 mp = GetMousePosition();
+                TraceLog(LOG_INFO, "MOUSETEST: mouse=(%.1f,%.1f) virtual aim=(%.2f,%.2f) pad=%d",
+                         mp.x, mp.y, input.aim.x, input.aim.y, input.usingGamepad);
+            }
+            if (mt >= 2.2f) { CaptureVirtualScreen("mousetest.png"); return 0; }
         }
 
         /* Dev aid: keep the wing-rearm banner pinned open for a screenshot. */
