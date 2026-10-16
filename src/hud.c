@@ -412,6 +412,17 @@ void HudDraw(Camera2D cam)
         }
     }
 
+    /* --- fps counter, bottom right, with a black box behind it ---------- */
+    {
+        char fpsBuf[16];
+        snprintf(fpsBuf, sizeof fpsBuf, "%d FPS", GetFPS());
+        float fw = TextWidthPix(assets.font, fpsBuf, 1);
+        DrawRectangle((int)(RENDER_W - fw - 8.0f), (int)(RENDER_H - 13.0f),
+                      (int)(fw + 6.0f), 11, (Color){ 0, 0, 0, 160 });
+        DrawTextPix(assets.font, fpsBuf, V2(RENDER_W - fw - 5.0f, RENDER_H - 11.0f), 1,
+                    (Color){ 200, 220, 240, 220 });
+    }
+
     /* --- damage vignette ---------------------------------------------- */
     if (g.damageFlash > 0.0f) {
         unsigned char a = (unsigned char)(90.0f * g.damageFlash);
@@ -626,4 +637,6 @@ void HudDrawPause(void)
                      centre + 28, 1, assets.font, (Color){ 126, 226, 250, 160 });
     DrawTextCentered("Q / X - RECALL    E / Y - BLAST    C - PAD CONTROLS",
                      centre + 42, 1, assets.font, (Color){ 126, 226, 250, 160 });
+    DrawTextCentered("F - CYCLE FPS CAP (30/60/120/144/OFF)",
+                      centre + 56, 1, assets.font, (Color){ 126, 226, 250, 120 });
 }

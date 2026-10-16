@@ -19,6 +19,7 @@
 
 Game       g     = {0};
 InputState input = {0};
+int fpsCap = 0;  /* 0 = uncapped */
 
 /* --------------------------------------------------------------------------
  *  Presentation state
@@ -837,6 +838,19 @@ static void HandleGlobalKeys(void)
 
             if (IsKeyPressed(KEY_C)) { remapActive = true; remapArmed = false; break; }
 
+            /* F cycles the FPS cap: uncapped, 30, 60, 120, 144. */
+            if (IsKeyPressed(KEY_F)) {
+                static const int fpsOpts[] = { 0, 30, 60, 120, 144 };
+                static int fpsIdx = 0;
+                /* find current index */
+                for (int i = 0; i < 5; i++) {
+                    if (fpsOpts[i] == fpsCap) { fpsIdx = i; break; }
+                }
+                fpsIdx = (fpsIdx + 1) % 5;
+                fpsCap = fpsOpts[fpsIdx];
+                SetTargetFPS(fpsCap);
+            }
+
             /* Escape: if we are still in fullscreen, the first press already
                paused; the second one drops out of fullscreen instead of
                unpausing. After that, Escape unpauses normally. */
@@ -883,7 +897,6 @@ int main(int argc, char **argv)
     bool titleCard = false;
     int  forceBiome = -1;
     int  wingUp = -1;
-    int  fpsCap = 0;  /* 0 = uncapped */
     bool mouseTest = false;
 #if !defined(__EMSCRIPTEN__)
     int startFlags = START_CENTER | START_FULLSCREEN;   /* play big by default */
