@@ -58,6 +58,15 @@
     var msgEl     = document.getElementById('msg');
     var barEl     = document.getElementById('prog');
     var canvasEl  = document.getElementById('canvas');
+  window.__mx = -1; window.__my = -1; window.__moved = 0;
+  function trackMouse(e) {
+    var r = canvasEl.getBoundingClientRect();
+    var sx = (e.clientX - r.left) * (canvasEl.width  / r.width);
+    var sy = (e.clientY - r.top)  * (canvasEl.height / r.height);
+    window.__mx = sx; window.__my = sy; window.__moved++;
+  }
+  window.addEventListener('mousemove', trackMouse, true);
+  canvasEl.addEventListener('mousemove', trackMouse, true);
 
     var Module = {
       preRun: [],

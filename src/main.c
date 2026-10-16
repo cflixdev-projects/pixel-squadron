@@ -325,7 +325,22 @@ static void GatherInput(void)
     if (IsKeyDown(KEY_W) || IsKeyDown(KEY_UP))    move.y -= 1.0f;
     if (IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN))  move.y += 1.0f;
 
-    Vector2 mouseVirtual = ScreenToVirtual(GetMousePosition());
+#if defined(__EMSCRIPTEN__)
+    /* The browser's own mouse tracking is more reliable than raylib's
+       web backend, which can lose events when the canvas is focused or
+       scaled. Fall back to raylib's value if JS has not seen a move. */
+    Vector2 rawMouse;
+    int jsmx = EM_ASM_INT({ return (window.__mx >= 0) ? window.__mx : -1; });
+    int jsmy = EM_ASM_INT({ return (window.__my >= 0) ? window.__my : -1; });
+    if (jsmx >= 0 && jsmy >= 0) {
+        rawMouse = V2((float)jsmx, (float)jsmy);
+    } else {
+        rawMouse = GetMousePosition();
+    }
+#else
+    Vector2 rawMouse = GetMousePosition();
+#endif
+    Vector2 mouseVirtual = ScreenToVirtual(rawMouse);
 
     bool firing  = IsMouseButtonDown(MOUSE_BUTTON_LEFT) || IsKeyDown(KEY_SPACE);
     bool boosting = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
@@ -403,7 +418,7 @@ static void GatherInput(void)
     }
 
     if (!padMode) {
-        Vector2 mouseWorld = GetScreenToWorld2D(GetMousePosition(), camera);
+        Vector2 mouseWorld = GetScreenToWorld2D(rawMouse, camera);
         Vector2 toMouse    = V2Sub(mouseWorld, g.player.pos);
         if (V2Len(toMouse) > 1.0f) aim = V2Norm(toMouse);
     }
@@ -1009,6 +1024,11 @@ int main(int argc, char **argv)
            would only be a second, differently-placed cursor on top of it. It
            comes back the moment we are in a menu. */
         {
+            /* On the web the OS cursor is kept visible: HideCursor is not
+               reliably implemented there, and if the game's own reticle ever
+               fails to track (a stuck mouse, a drifting pad) the player
+               would be aiming blind. The game reticle still draws on top. */
+#if !defined(__EMSCRIPTEN__)
             static bool cursorHidden = false;
             bool wantHidden = (g.state == STATE_PLAY || g.state == STATE_TITLE) &&
                               !g.autoPilot;
@@ -1016,6 +1036,7 @@ int main(int argc, char **argv)
                 if (wantHidden) HideCursor(); else ShowCursor();
                 cursorHidden = wantHidden;
             }
+#endif
         }
 
         if (g.state == STATE_PLAY) {
