@@ -975,7 +975,7 @@ int main(int argc, char **argv)
 #endif
 
     SetExitKey(KEY_NULL);          /* we handle Escape ourselves */
-    SetTargetFPS(fpsCap);  /* 0 = uncapped */
+    SetTargetFPS((fpsCap <= 0) ? 1000 : fpsCap);  /* 0 = uncapped */
     SetRandomSeed(seed ? seed : (unsigned)time(NULL));
     ArenaForceBiome(forceBiome);   /* no-op unless --biome was passed */
 

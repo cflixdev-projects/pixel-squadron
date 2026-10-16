@@ -192,8 +192,8 @@ static float Fbm(float x, float y, unsigned seed, int octaves)
  * ----------------------------------------------------------------------- */
 static float TileHeight(int tx, int ty)
 {
-    float cont  = Fbm(tx * 0.0230f, ty * 0.0230f, s_seed, 5);
-    float ridge = Fbm(tx * 0.0550f, ty * 0.0550f, s_seed + 7717u, 3);
+    float cont  = Fbm(tx * 0.0230f, ty * 0.0230f, s_seed, 3);
+    float ridge = Fbm(tx * 0.0550f, ty * 0.0550f, s_seed + 7717u, 2);
     float micro = ValueNoise(tx * 0.180f, ty * 0.180f, s_seed + 991u);
 
     return 0.470f
@@ -236,7 +236,7 @@ static void BiomeSample(int tx, int ty, Biome *out)
 {
     if (s_forced) { *out = s_force; return; }
 
-    float bf = Fbm(tx * 0.0042f, ty * 0.0042f, s_seed + 50505u, 2);
+    float bf = Fbm(tx * 0.0042f, ty * 0.0042f, s_seed + 50505u, 1);
 
     /* stretch the midband out to the ends so every biome really does turn up */
     bf = Clamp((bf - 0.5f) * 2.2f + 0.5f, 0.0f, 0.9999f) * (float)BIOME_COUNT;
