@@ -419,8 +419,10 @@ static void GatherInput(void)
     }
 
     if (!padMode) {
-        Vector2 mouseWorld = V2Add(camera.target, V2Sub(mouseVirtual, V2(BASE_W * 0.5f, BASE_H * 0.5f)));
-        Vector2 toMouse    = V2Sub(mouseWorld, g.player.pos);
+        /* Aim straight at the mouse: the direction from the screen centre to
+           the cursor. No camera, no world space, no deadzone - the mouse
+           always wins here. */
+        Vector2 toMouse = V2Sub(mouseVirtual, V2(BASE_W * 0.5f, BASE_H * 0.5f));
         if (V2Len(toMouse) > 1.0f) aim = V2Norm(toMouse);
     }
 
