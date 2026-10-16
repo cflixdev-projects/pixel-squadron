@@ -119,9 +119,8 @@ static void DrawWingmanRow(int i, float y)
     DrawRectangleLinesEx(bar, 1.0f, (Color){ 223, 246, 245, 70 });
 
     /* special-weapon pip: lit when the special is charged and ready */
-    const AllyProfile *pro = pr;
     float ready = a->alive
-                ? Clamp(1.0f - a->specialTimer / pro->cooldown, 0.0f, 1.0f)
+                ? Clamp(1.0f - a->specialTimer / pr->cooldown, 0.0f, 1.0f)
                 : 0.0f;
 
     Rectangle pip = { 107.0f, y + 2.0f, 5.0f, 5.0f };
@@ -134,6 +133,18 @@ static void DrawWingmanRow(int i, float y)
                       (Color){ 126, 226, 250, 150 });
     }
     DrawRectangleLinesEx(pip, 1.0f, (Color){ 223, 246, 245, 70 });
+
+    /* the move itself, named so it is obvious that everyone has one. It
+       brightens when it is charged, and flashes when it actually fires. */
+    float namePulse = a->alive ? ready : 0.0f;
+    if (a->specialFlash > 0.0f) namePulse = 1.0f;
+    Color spec = a->alive
+               ? (Color){ (unsigned char)(126.0f + 129.0f * namePulse),
+                          (unsigned char)(226.0f + 10.0f * namePulse),
+                          (unsigned char)(250.0f - 5.0f * namePulse),
+                          (unsigned char)(120.0f + 135.0f * namePulse) }
+               : (Color){ 74, 92, 110, 255 };
+    DrawTextPix(assets.font, pr->special, V2(118.0f, y), 1, spec);
 }
 
 void HudDraw(Camera2D cam)
@@ -161,7 +172,7 @@ void HudDraw(Camera2D cam)
     /* --- the squadron, below the hull panel --------------------------- */
     /* Taller rows with a clear gap under the heading: at the old 11px pitch
        the first name ran straight into the "WINGMEN" title. */
-    DrawPanel((Rectangle){ 6, 38, 124, 64 });
+    DrawPanel((Rectangle){ 6, 38, 150, 64 });
     DrawTextPixShadow(assets.font, "WINGMEN", V2(10, 42), 1, COL_SHALLOW);
 
     for (int i = 0; i < MAX_ALLIES; i++)

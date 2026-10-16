@@ -346,11 +346,15 @@ static void GatherInput(void)
 
         if (V2Len(ls) > 0.22f) move = ls;
 
-        if (V2Len(rs) > 0.28f) {
+        /* Aiming out of the deadzone takes the crosshair; only a proper push
+           opens fire, so a worn stick that never quite centres cannot spray
+           the map on its own. */
+        float rsLen = V2Len(rs);
+        if (rsLen > 0.30f) {
             aim    = V2Norm(rs);
-            firing = true;
             padAim = true;
         }
+        if (rsLen > 0.42f) firing = true;
 
         if (IsGamepadButtonDown(0, binds.button[BIND_FIRE]))  firing   = true;
         if (IsGamepadButtonDown(0, binds.button[BIND_BOOST])) boosting = true;
@@ -364,25 +368,30 @@ static void GatherInput(void)
     }
 
     /* --- which hand is driving? ------------------------------------------
-       The mouse keeps the crosshair unless the right stick is actually being
-       pushed. A resting stick - or a worn one that never quite centres - must
-       not steal the aim from the hand that is holding the mouse, so the two
-       never fight over it. The choice is sticky, so the reticle does not flick
-       between input devices from frame to frame. */
+       The two never fight over the crosshair. Moving the mouse - or holding
+       the button - takes the aim away from the pad *there and then*; only a
+       right stick actually pushed past its deadzone hands it back. A resting
+       stick, or a worn one that never quite centres, can never steal the aim
+       from the hand holding the mouse.
+       The decision is sticky, and the aim below follows the *decision*, not
+       the raw stick reading - otherwise a single held stick would freeze the
+       guns on the last pad angle while the reticle happily went with the
+       mouse. */
     static bool    padMode   = false;
     static Vector2 lastMouse = { -1.0f, -1.0f };
 
-    if (padAim) padMode = true;
-    if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) padMode = false;
-
-    if (lastMouse.x >= 0.0f &&
-        (fabsf(mouseVirtual.x - lastMouse.x) > 0.5f ||
-         fabsf(mouseVirtual.y - lastMouse.y) > 0.5f)) {
-        padMode = false;
-    }
+    bool mouseMoved = (lastMouse.x >= 0.0f) &&
+                      (fabsf(mouseVirtual.x - lastMouse.x) > 0.5f ||
+                       fabsf(mouseVirtual.y - lastMouse.y) > 0.5f);
     lastMouse = mouseVirtual;
 
-    if (!padAim) {
+    if (mouseMoved || IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+        padMode = false;
+    } else if (padAim) {
+        padMode = true;
+    }
+
+    if (!padMode) {
         Vector2 mouseWorld = GetScreenToWorld2D(mouseVirtual, camera);
         Vector2 toMouse    = V2Sub(mouseWorld, g.player.pos);
         if (V2Len(toMouse) > 1.0f) aim = V2Norm(toMouse);

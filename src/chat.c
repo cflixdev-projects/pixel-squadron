@@ -51,6 +51,9 @@ static const char *kLines[ALLY_ROLE_COUNT][CHAT_EVENTS][LINES_PER_EVENT] = {
                             "COMING THROUGH!", "SAVE SOME FOR ME!", "ALREADY THERE, SIX." },
         [CHAT_LOOT]    = { "MINE. BACK OFF.", "OH HELL YES.", "SHINY.", "THIS IS COMING WITH ME.",
                             "I CALL DIBS.", "DON'T TOUCH MY CRATE." },
+        [CHAT_ELITE]   = { "THEY'VE GOT ARMOUR PLATING. FUCK.", "PLATED BASTARDS INBOUND.",
+                            "OH GOOD, THE TOUGH ONES.", "THEY BROUGHT THE HARDWARE.",
+                            "ARMOUR UP. BIG DEAL.", "GREAT. THE EXPENSIVE ONES." },
     },
 
     /* --------------------------------------------------------- JUNO ----
@@ -78,6 +81,9 @@ static const char *kLines[ALLY_ROLE_COUNT][CHAT_EVENTS][LINES_PER_EVENT] = {
                             "MOVING TO YOU NOW.", "RIGHT BEHIND YOU.", "COVERING YOUR SIX." },
         [CHAT_LOOT]    = { "TOOK IT.", "GRABBED IT.", "NEEDED THAT.", "PERFECT TIMING.",
                             "I'LL TAKE IT.", "USEFUL." },
+        [CHAT_ELITE]   = { "PLATED CONTACTS. WATCH YOUR FIRE.", "ARMoured. FOCUS THE LEADERS.",
+                            "ELITE ESCORT. PRIORITY TARGET.", "THEY'VE UPGRADED. SO HAVE WE.",
+                            "HEAVIER HULLS. ADJUST.", "THEY BROUGHT THE GOOD STUFF." },
     },
 
     /* ---------------------------------------------------------- BIT ----
@@ -107,6 +113,9 @@ static const char *kLines[ALLY_ROLE_COUNT][CHAT_EVENTS][LINES_PER_EVENT] = {
                             "DON'T LEAVE ME!", "OKAY OKAY I'M COMING!", "COMING COMING COMING!" },
         [CHAT_LOOT]    = { "OH! SHINY!", "IS THIS MINE? IT'S MINE.", "I FOUND SOMETHING!",
                             "WAIT, WAS THAT YOURS?", "OOPS. MINE NOW.", "HEHEHE. PRESENTS." },
+        [CHAT_ELITE]   = { "THEY'RE ALL SHINY NOW! RUN!", "PLATED. BIG PLATED. HELP.",
+                            "THEY BROUGHT THE SCARY ONES.", "WHY ARE THEY BIGGER?!",
+                            "I DON'T LIKE THIS UPGRADE.", "ELITE?! SINCE WHEN?!" },
     },
 };
 

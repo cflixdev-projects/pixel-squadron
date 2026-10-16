@@ -281,6 +281,7 @@ typedef struct {
     float spawnFade;  /* 1 -> 0 while materialising         */
     float charge;     /* lancer wind-up, >0 while lining up a shot */
     int score;
+    bool elite;       /* the plated variant: more hull, worth a lot more */
 } Enemy;
 
 /* Who fired a bullet: enemies hurt the squadron, the squadron hurts enemies. */
@@ -326,6 +327,7 @@ typedef struct {
     int     slot;          /* formation slot, also the HUD column */
     int     role;          /* AllyRole */
     float   specialTimer;  /* counts down to the next special attack */
+    float   specialFlash;  /* >0 for a moment after the special fires */
     float   distress;      /* >0 while calling for help (drives the beacon) */
     float   helpCool;      /* quiet period between two calls for help */
     float   assistTimer;   /* >0 while running to rescue a buddy */
@@ -488,6 +490,7 @@ typedef enum {
     CHAT_REPLY,    /* answering whoever just spoke  */
     CHAT_RALLY,    /* answering the player's recall */
     CHAT_LOOT,     /* just grabbed something off the ground */
+    CHAT_ELITE,    /* a plated escort pack just landed     */
     CHAT_EVENTS
 } ChatEvent;
 
@@ -689,6 +692,7 @@ void ChatSayText(int slot, const char *text);
 void ChatSystem(const char *who, Color color, const char *text);
 
 void SpawnEnemy(EnemyKind kind, Vector2 pos);
+void SpawnEnemyElite(EnemyKind kind, Vector2 pos);
 /* Returns the bullet so callers can tag it (seeker missiles set homing). */
 Bullet *SpawnBullet(Vector2 pos, Vector2 vel, int sprite, float damage, float life,
                     float scale, int owner, int slot);

@@ -237,7 +237,7 @@ static EnemyLook EnemyLookOf(EnemyKind k)
     }
 }
 
-void SpawnEnemy(EnemyKind kind, Vector2 pos)
+static void SpawnEnemyEx(EnemyKind kind, Vector2 pos, bool elite)
 {
     static int cursor = 0;
 
@@ -249,6 +249,14 @@ void SpawnEnemy(EnemyKind kind, Vector2 pos)
     if (!e) return;
 
     float d = g.difficulty;
+
+    /* The elite roll happens here, so every spawn site - including the
+       splitter's burst - gets a chance at it. */
+    if (!elite && g.wave >= 5) {
+        int chance = 8 * (g.wave / 5);
+        if (chance > 40) chance = 40;
+        elite = (GetRandomValue(0, 99) < chance);
+    }
 
     switch (kind) {
         case ENEMY_RAIDER:
@@ -309,6 +317,16 @@ void SpawnEnemy(EnemyKind kind, Vector2 pos)
             break;
     }
 
+    /* Elite: plated, bigger, worth a lot more. */
+    if (elite) {
+        e->hp    *= 2.6f;
+        e->radius *= 1.25f;
+        e->score  *= 3;
+        e->elite  = true;
+    } else {
+        e->elite = false;
+    }
+
     e->kind      = kind;
     e->alive     = true;
     e->maxHp     = e->hp;
@@ -321,6 +339,15 @@ void SpawnEnemy(EnemyKind kind, Vector2 pos)
     e->charge    = 0.0f;
 }
 
+void SpawnEnemy(EnemyKind kind, Vector2 pos)
+{
+    SpawnEnemyEx(kind, pos, false);
+}
+
+void SpawnEnemyElite(EnemyKind kind, Vector2 pos)
+{
+    SpawnEnemyEx(kind, pos, true);
+}
 void EnemiesClear(void)
 {
     for (int i = 0; i < MAX_ENEMIES; i++) g.enemies[i].alive = false;
@@ -374,6 +401,7 @@ void EntitiesReset(void)
             .maxHp        = ALLY_MAX_HP,
             .fireTimer    = 0.6f + (float)i * 0.2f,
             .specialTimer = 2.5f + (float)i * 0.9f,
+            .specialFlash = 0.0f,
             .slot         = i,
             .role         = i,     /* the roster is VEX, JUNO, BIT */
         };
@@ -798,11 +826,16 @@ void DamageEnemy(Enemy *e, float amount)
     g.score += e->score;
     g.kills++;
 
-    bool big = (e->kind == ENEMY_HEAVY || e->kind == ENEMY_SPLITTER);
+    bool big = (e->kind == ENEMY_HEAVY || e->kind == ENEMY_SPLITTER || e->elite);
     SpawnBurst(e->pos, big ? 1.6f : 1.0f);
     SpawnBurstParticles(e->pos, big ? 1.9f : 1.0f, (Color){ 255, 236, 159, 255 });
 
-    if (big) {
+    if (e->elite) {
+        SpawnPopup(e->pos, "ELITE DOWN", (Color){ 255, 220, 110, 255 });
+        g.shake   = fmaxf(g.shake, 12.0f);
+        g.hitStop = fmaxf(g.hitStop, 0.08f);
+        PlaySfx(assets.explosionBig, 0.55f, 0.85f);
+    } else if (big) {
         g.shake   = fmaxf(g.shake, 9.0f);
         g.hitStop = fmaxf(g.hitStop, 0.06f);
         PlaySfx(assets.explosionBig, 0.5f, 1.0f);
@@ -822,14 +855,18 @@ void DamageEnemy(Enemy *e, float amount)
 
     /* Loot table. The heavy stuff drops the interesting crates. */
     int  roll   = GetRandomValue(0, 99);
-    int  chance = (e->kind == ENEMY_HEAVY)    ? 70
+    int  chance = e->elite ? 100
+                : (e->kind == ENEMY_HEAVY)    ? 70
                 : (e->kind == ENEMY_TENDER)   ? 60
                 : (e->kind == ENEMY_SPLITTER) ? 40
                 : (e->kind == ENEMY_LANCER)   ? 28
                 : (e->kind == ENEMY_RAIDER)   ? 12
                                               : 10;
     PickupKind kind;
-    if (e->kind == ENEMY_HEAVY || e->kind == ENEMY_LANCER) {
+    if (e->elite) {
+        /* elites carry the good stuff */
+        kind = (GetRandomValue(0, 2) == 0) ? RandomWeaponCrate() : PICK_POWER;
+    } else if (e->kind == ENEMY_HEAVY || e->kind == ENEMY_LANCER) {
         /* gunships carry guns */
         kind = (GetRandomValue(0, 2) == 0) ? RandomWeaponCrate() : PICK_POWER;
     } else if (e->kind == ENEMY_TENDER || e->kind == ENEMY_RAIDER) {
@@ -1063,6 +1100,21 @@ void EnemiesDraw(void)
             tint.a = (unsigned char)(255.0f * (1.0f - e->spawnFade / ENEMY_SPAWN_FADE));
         }
 
+        /* Elite: plated. Gold ring and a warm tint, so it reads as different
+           at a glance rather than just a bigger number. */
+        float eliteScale = e->elite ? 1.25f : 1.0f;
+        if (e->elite && e->spawnFade <= 0.0f) {
+            float pulse = 0.5f + 0.5f * sinf(g.time * 4.0f + e->wobble);
+            DrawCircleLines((int)floorf(e->pos.x), (int)floorf(e->pos.y),
+                            e->radius + 5.0f + pulse * 3.0f,
+                            (Color){ 255, 220, 110, (unsigned char)(90.0f + 60.0f * pulse) });
+            /* wash the hull toward gold */
+            tint = (Color){ (unsigned char)(tint.r + (255 - tint.r) * 0.35f),
+                            (unsigned char)(tint.g + (200 - tint.g) * 0.20f),
+                            (unsigned char)(tint.b * 0.6f),
+                            tint.a };
+        }
+
         /* The tender broadcasts: a slow pulse so it is obvious who is keeping
            the swarm alive, and obviously worth killing first. */
         if (e->kind == ENEMY_TENDER && e->spawnFade <= 0.0f) {
@@ -1087,7 +1139,7 @@ void EnemiesDraw(void)
         }
 
         DrawShip(look.sprite, e->pos, e->angle * RAD2DEG + ART_FORWARD,
-                 look.scale, tint);
+                 look.scale * eliteScale, tint);
 
         /* health bar for the ships that can take a beating */
         if (e->kind != ENEMY_SCOUT && e->kind != ENEMY_DART && e->hp < e->maxHp) {
@@ -1488,21 +1540,33 @@ void AllySpecial(Ally *a)
     Vector2 dir = V2(cosf(a->angle), sinf(a->angle));
     Vector2 side = V2(-dir.y, dir.x);
 
+    a->specialFlash = 0.55f;
+
     switch (a->role) {
         /* ---------------------------------------------------------- VEX ----
-           A five-round spread. Rude, loud, effective at knife range. */
+           BROADSIDE. Vex has no patience for a neat firing line: she dumps a
+           ring of shot out of both airlocks at once, which answers being
+           surrounded and, in her view, most other questions too. */
         case ALLY_VEX:
         default: {
-            for (int i = -2; i <= 2; i++) {
-                float ang = a->angle + (float)i * 12.0f * DEG2RAD;
+            for (int i = 0; i < 12; i++) {
+                float ang = a->angle + (float)i * 30.0f * DEG2RAD;
                 Vector2 d = V2(cosf(ang), sinf(ang));
-                SpawnBullet(V2Add(a->pos, V2Scale(d, 11.0f)),
-                            V2Scale(d, ALLY_BULLET_SPD * 0.94f),
-                            TILE_BOLT, ALLY_BULLET_DMG * 0.7f * AllyGunMul(a),
-                            0.85f, 0.9f, BULLET_ALLY, a->slot);
+                SpawnBullet(V2Add(a->pos, V2Scale(d, 10.0f)),
+                            V2Scale(d, ALLY_BULLET_SPD * 0.72f),
+                            TILE_BOLT, ALLY_BULLET_DMG * 0.75f * AllyGunMul(a),
+                            1.6f, 0.55f, BULLET_ALLY, a->slot);
             }
-            SpawnBurstParticles(V2Add(a->pos, V2Scale(dir, 12.0f)), 0.4f, pr->hull);
-            PlaySfx(assets.enemyShoot, 0.22f, 1.55f);
+            for (int i = 0; i < 10; i++) {
+                float ang = (float)i * 36.0f * DEG2RAD;
+                Vector2 d = V2(cosf(ang), sinf(ang));
+                SpawnBurstParticles(V2Add(a->pos, V2Scale(d, 13.0f)), 0.28f, pr->hull);
+            }
+
+            TextCopy(g.message, "VEX - BROADSIDE");
+            g.messageTimer    = 1.4f;
+            g.shake           = fmaxf(g.shake, 4.0f);
+            PlaySfx(assets.explosion, 0.32f, 1.4f);
             break;
         }
 
@@ -1513,7 +1577,7 @@ void AllySpecial(Ally *a)
         case ALLY_JUNO: {
             FieldCast(a);
 
-            TextCopy(g.message, "AEGIS FIELD");
+            TextCopy(g.message, "JUNO - AEGIS FIELD");
             g.messageTimer = 1.4f;
 
             for (int i = -1; i <= 1; i += 2) {
@@ -1528,22 +1592,27 @@ void AllySpecial(Ally *a)
         }
 
         /* ---------------------------------------------------------- BIT ----
-           Two seekers that hunt by themselves. Terrible for the nerves. */
+           WASP SWARM. Five seekers leave in a fan, arc around and come back
+           for anything still moving. Terrible for the nerves - hers and
+           everyone else's. */
         case ALLY_BIT: {
-            for (int i = -1; i <= 1; i += 2) {
+            for (int i = -2; i <= 2; i++) {
                 Vector2 from = V2Add(V2Add(a->pos, V2Scale(dir, 8.0f)),
-                                     V2Scale(side, 5.0f * (float)i));
-                float ang = a->angle + (float)i * 18.0f * DEG2RAD;
+                                     V2Scale(side, 4.0f * (float)i));
+                float ang = a->angle + (float)i * 24.0f * DEG2RAD;
                 Vector2 d = V2(cosf(ang), sinf(ang));
 
-                Bullet *b = SpawnBullet(from, V2Scale(d, 210.0f), TILE_BOLT,
-                                        ALLY_BULLET_DMG * 1.6f * AllyGunMul(a),
-                                        2.6f, 1.15f, BULLET_ALLY, a->slot);
-                if (b) b->homing = 5.4f;
+                Bullet *b = SpawnBullet(from, V2Scale(d, 190.0f), TILE_BOLT,
+                                        ALLY_BULLET_DMG * 1.25f * AllyGunMul(a),
+                                        2.4f, 1.6f, BULLET_ALLY, a->slot);
+                if (b) b->homing = 4.6f;
 
                 SpawnBurstParticles(from, 0.25f, pr->hull);
             }
-            PlaySfx(assets.enemyShoot, 0.20f, 0.9f);
+
+            TextCopy(g.message, "BIT - WASP SWARM");
+            g.messageTimer = 1.4f;
+            PlaySfx(assets.enemyShoot, 0.22f, 0.85f);
             break;
         }
     }
@@ -1809,6 +1878,7 @@ void AlliesUpdate(float dt)
         /* --- fire once roughly on target ------------------------------- */
         a->fireTimer    -= dt;
         a->specialTimer -= dt;
+        if (a->specialFlash > 0.0f) a->specialFlash -= dt;
 
         if (target && a->fireTimer <= 0.0f && a->spawnFade <= 0.0f && aimL > 4.0f) {
             /* A recall puts every gun on the threat, so the wing shoots more
@@ -2420,6 +2490,31 @@ void StartWave(int wave)
     g.wavePending = g.waveScout + g.waveRaider + g.waveHeavy +
                     g.waveDart + g.waveLancer + g.waveSplitter + g.waveTender;
     g.spawnTimer  = 1.2f;
+
+    /* Every fifth wave the swarm brings a pack of plated escorts. They land
+       on the islands around the squadron, so they are in the fight immediately
+       rather than trickling in from the edge. */
+    if (wave >= 5 && (wave % 5) == 0) {
+        int pack = 1 + wave / 10;
+        if (pack > 6) pack = 6;
+        for (int i = 0; i < pack; i++) {
+            Vector2 where = V2Add(g.player.pos,
+                                  V2((float)GetRandomValue(-300, 300),
+                                     (float)GetRandomValue(-180, 180)));
+            where = ArenaRandomLandNear(where, 16.0f, 40.0f);
+
+            EnemyKind k;
+            if (wave >= 15)      k = (GetRandomValue(0, 1) == 0) ? ENEMY_HEAVY   : ENEMY_RAIDER;
+            else if (wave >= 10) k = (GetRandomValue(0, 1) == 0) ? ENEMY_RAIDER  : ENEMY_SCOUT;
+            else                 k = ENEMY_SCOUT;
+            SpawnEnemyElite(k, where);
+        }
+        /* the wing has opinions about the new armour */
+        int alive[ALLY_ROLE_COUNT], n = 0;
+        for (int i = 0; i < MAX_ALLIES; i++)
+            if (g.allies[i].alive) alive[n++] = i;
+        if (n > 0) ChatSay(alive[GetRandomValue(0, n - 1)], CHAT_ELITE);
+    }
 
     /* Rearm the wing before the shooting starts. On the waves where the wing
        levels up this shouts over the wave banner, which is exactly right. */
