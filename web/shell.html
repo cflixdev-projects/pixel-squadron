@@ -62,14 +62,16 @@
   window.__mx = 240; window.__my = 135; window.__moved = 0;
   var __locked = false;
   var __mx = 240, __my = 135;
+  var __escCount = 0;
+  var __escTimer = 0;
 
   function trackMouse(e) {
     if (__locked) {
-      // Pointer lock: relative movement, accumulated and clamped.
-      var cw = canvasEl.clientWidth  || 480;
-      var ch = canvasEl.clientHeight || 270;
-      __mx += e.movementX * (480.0 / cw);
-      __my += e.movementY * (270.0 / ch);
+      // Pointer lock: relative movement with reduced sensitivity to counteract
+      // OS mouse acceleration. Accumulated and clamped to the virtual screen.
+      var sens = 0.4;
+      __mx += e.movementX * sens;
+      __my += e.movementY * sens;
       if (__mx < 0) __mx = 0; if (__mx > 480) __mx = 480;
       if (__my < 0) __my = 0; if (__my > 270) __my = 270;
     } else {
@@ -84,10 +86,15 @@
     if (dbg) dbg.textContent = 'jsMouse: ' + Math.round(__mx) + ',' + Math.round(__my) + ' locked:' + __locked;
   }
 
-  // Request pointer lock on click during play so the mouse stays in the window.
+  // Request pointer lock + fullscreen on click during play.
   canvasEl.addEventListener('mousedown', function() {
     if (!__locked && canvasEl.requestPointerLock) {
       canvasEl.requestPointerLock();
+    }
+    // Request fullscreen on first click too.
+    if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+      var el = canvasEl;
+      (el.requestFullscreen || el.webkitRequestFullscreen || function(){}).call(el);
     }
   });
 
@@ -99,6 +106,25 @@
       canvasEl.style.cursor = 'crosshair';
     }
   });
+
+  // Escape handling: 1st press pauses (stay fullscreen), 2nd exits fullscreen.
+  window.addEventListener('keydown', function(e) {
+    if (e.key !== 'Escape' && e.code !== 'Escape') return;
+    if (__locked) {
+      // Browser exits pointer lock automatically on Escape.
+      // The game will also pause (handled by C code).
+    }
+    // Track escape presses for fullscreen exit.
+    __escCount++;
+    clearTimeout(__escTimer);
+    __escTimer = setTimeout(function() { __escCount = 0; }, 1000);
+    if (__escCount >= 2) {
+      __escCount = 0;
+      if (document.fullscreenElement || document.webkitFullscreenElement) {
+        (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+      }
+    }
+  }, true);
 
   window.addEventListener('mousemove', trackMouse, true);
   canvasEl.addEventListener('mousemove', trackMouse, true);

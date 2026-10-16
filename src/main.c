@@ -831,7 +831,23 @@ static void HandleGlobalKeys(void)
 
             if (IsKeyPressed(KEY_C)) { remapActive = true; remapArmed = false; break; }
 
-            if (IsKeyPressed(KEY_P) || IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_ENTER) ||
+            /* Escape: if we are still in fullscreen, the first press already
+               paused; the second one drops out of fullscreen instead of
+               unpausing. After that, Escape unpauses normally. */
+            if (IsKeyPressed(KEY_ESCAPE)) {
+#if defined(__EMSCRIPTEN__)
+                int inFs = EM_ASM_INT({ return (document.fullscreenElement || document.webkitFullscreenElement) ? 1 : 0; });
+                if (inFs) {
+                    EM_ASM({ if (document.exitFullscreen) document.exitFullscreen();
+                             else if (document.webkitExitFullscreen) document.webkitExitFullscreen(); });
+                    break;   /* stay paused, just left fullscreen */
+                }
+#endif
+                g.state = STATE_PLAY;
+                break;
+            }
+
+            if (IsKeyPressed(KEY_P) || IsKeyPressed(KEY_ENTER) ||
                 IsGamepadButtonPressed(0, GAMEPAD_BUTTON_MIDDLE_RIGHT)) {
                 g.state = STATE_PLAY;
             }
