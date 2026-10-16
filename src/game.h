@@ -147,13 +147,16 @@ enum TileSprite {
  *  Pools
  * ---------------------------------------------------------------------- */
 #define MAX_BULLETS 768
-#define MAX_ENEMIES 128
+#define MAX_ENEMIES 160
 #define MAX_PARTICLES 1536
 #define MAX_PICKUPS 48
 #define MAX_BURSTS 80
 #define MAX_POPUPS 40
 #define MAX_ALLIES 3
 #define ALLY_RESPAWN 15.0f  /* seconds before a downed wingman rejoins */
+#define ALLY_POWER_TIME  9.0f    /* a weapon crate keeps a wingman hot   */
+#define ALLY_SHIELD_TIME 8.0f    /* a shield crate keeps a wingman alive  */
+#define ALLY_CRATE_RANGE 240.0f  /* how far they will detour for loot    */
 
 #define PLAYER_MAX_HP 100.0f
 
@@ -162,9 +165,12 @@ enum TileSprite {
 #define PLAYER_BOOST_MULT 1.75f  /* top-speed multiplier while boosting */
 
 /* The player can call the wing back at any time; the radio takes a moment to
-   recover before it can be used again. */
-#define RALLY_TIME 4.5f
+   recover before it can be used again. A recall is an order to come home *and*
+   fight, so the wing sprints in and then holds station around the player,
+   shooting whatever comes near. */
+#define RALLY_TIME 5.5f
 #define RALLY_COOLDOWN 7.0f
+#define ALLY_RALLY_ARRIVE 86.0f  /* inside this of the slot = on station    */
 
 /* Chance that any given friendly hit lands critically, for extra hurt. */
 #define CRIT_CHANCE 20      /* percent */
@@ -197,9 +203,14 @@ typedef struct {
 } Player;
 
 typedef enum {
-    ENEMY_SCOUT,
-    ENEMY_RAIDER,
-    ENEMY_HEAVY,
+    ENEMY_SCOUT,     /* the baseline: circles and pecks                  */
+    ENEMY_RAIDER,    /* fast, fragile, eager                             */
+    ENEMY_HEAVY,     /* slow gunship, three-wide volleys                 */
+    ENEMY_DART,      /* tiny, very fast, dives in and rams               */
+    ENEMY_LANCER,    /* hangs back and snipes; charges in plain sight    */
+    ENEMY_SPLITTER,  /* bursts into two darts when it dies               */
+    ENEMY_TENDER,    /* patches up everything around it - kill it first  */
+    ENEMY_KIND_COUNT
 } EnemyKind;
 
 typedef struct {
@@ -214,6 +225,7 @@ typedef struct {
     float wobble;     /* per-enemy phase offset             */
     float hitFlash;
     float spawnFade;  /* 1 -> 0 while materialising         */
+    float charge;     /* lancer wind-up, >0 while lining up a shot */
     int score;
 } Enemy;
 
@@ -265,6 +277,8 @@ typedef struct {
     float   assistTimer;   /* >0 while running to rescue a buddy */
     Vector2 assistAt;      /* where the buddy in trouble was last seen */
     float   rallyTimer;    /* >0 while answering the player's recall */
+    float   powerTimer;    /* >0 while their guns are hot from a crate */
+    float   shieldTimer;   /* >0 while a shield crate is holding      */
 } Ally;
 
 typedef struct {
@@ -320,6 +334,7 @@ typedef struct {
 } Popup;
 
 typedef enum {
+    STATE_TITLE,     /* attract card over the land the next run will start on */
     STATE_PLAY,
     STATE_PAUSED,
     STATE_GAMEOVER,
@@ -363,6 +378,8 @@ typedef enum {
     CHAT_WAVE,     /* new wave inbound              */
     CHAT_CLEAR,    /* wave wiped out                */
     CHAT_REPLY,    /* answering whoever just spoke  */
+    CHAT_RALLY,    /* answering the player's recall */
+    CHAT_LOOT,     /* just grabbed something off the ground */
     CHAT_EVENTS
 } ChatEvent;
 
@@ -398,12 +415,18 @@ typedef struct {
     int waveScout;       /* remaining composition of the wave     */
     int waveRaider;
     int waveHeavy;
+    int waveDart;
+    int waveLancer;
+    int waveSplitter;
+    int waveTender;
     float spawnTimer;
     float difficulty;
     bool  waveBreak;     /* true during the breather between waves     */
     float stateTimer;    /* generic timer for state transitions        */
     float rallyCool;     /* >0 while the recall radio recharges        */
+    float rallyTimer;    /* >0 while the squadron is answering a recall */
     int   crits;         /* how many shots landed critically this run  */
+    int   allyKills[MAX_ALLIES];  /* wing kills, per slot - the wing's rank */
 
     /* feel */
     float shake;
@@ -490,6 +513,12 @@ void DrawTileSprite(int idx, Vector2 pos, float rotDeg, float scale, Color tint)
 void ArenaGenerate(unsigned seed);
 TerrainKind ArenaAt(int tx, int ty);
 bool ArenaBlocksAt(Vector2 world);
+/* Dev switch: force the entire world to be one biome, by index. Anything out
+   of range goes back to the normal mix. Used by --biome. */
+void ArenaForceBiome(int id);
+/* The name of the biome covering a world position - the HUD names the country
+   the player is flying over, and the biomes are worth naming. */
+const char *ArenaBiomeNameAt(Vector2 world);
 /* A random spot on clear land between `rmin` and `rmax` pixels from `centre`.
    Supplies are dropped into the world this way. */
 Vector2 ArenaRandomLandNear(Vector2 centre, float rmin, float rmax);
@@ -514,6 +543,9 @@ int  EnemiesAliveCount(void);
 /* Wingmen */
 void AlliesUpdate(float dt);
 void AlliesDraw(void);
+/* The recall beacon: a ring on the player plus a tether to everyone still
+   inbound. Drawn over the ships so it is obvious what the button did. */
+void RallyDraw(void);
 void AllyDamage(Ally *a, float amount);
 void AllySpecial(Ally *a);
 int  AlliesAliveCount(void);
@@ -521,7 +553,8 @@ Vector2 AllyFormationPos(int slot);
 /* Puts a beacon on the map: the wingman names itself as being in trouble, the
    others turn to help, and the HUD shows a red marker. */
 void AllyCallForHelp(Ally *a);
-/* The player's recall: every wingman drops what it is doing and comes back. */
+/* The player's recall: every wingman breaks off, comes home and holds station,
+   shooting anything that follows them in. */
 void AlliesRally(void);
 /* Hands the wing out better gear as the waves get meaner. */
 void AlliesUpgrade(void);
@@ -569,6 +602,7 @@ void DrawPixelNumber(long value, Vector2 pos, int digits, float scale, Color tin
 void HudDraw(Camera2D cam);
 void HudDrawGameOver(void);
 void HudDrawPause(void);
+void HudDrawTitle(void);
 
 /* -------------------------------------------------------------------------
  *  helpers

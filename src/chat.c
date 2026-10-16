@@ -23,52 +23,90 @@
  *  Indexed [role][event][variation]; a NULL variation ends the list. Lines are
  *  short on purpose - they are read at a glance while flying.
  * ----------------------------------------------------------------------- */
-#define LINES_PER_EVENT 4
+#define LINES_PER_EVENT 6
 
 static const char *kLines[ALLY_ROLE_COUNT][CHAT_EVENTS][LINES_PER_EVENT] = {
     /* ---------------------------------------------------------- VEX ----
-       Cocky, loud, allergic to humility. Calls the player "SIX". */
+       Cocky, loud, allergic to humility. Calls the player "SIX". Swears like
+       it is a personality. */
     [ALLY_VEX] = {
-        [CHAT_KILL]    = { "SCRATCH ONE!", "TOO EASY.", "WHO'S NEXT?!", "THAT'S HOW IT'S DONE." },
-        [CHAT_BUDDY]   = { "NO - I'VE GOT YOU!", "THEY'LL PAY FOR THAT.", NULL, NULL },
-        [CHAT_HURT]    = { "I'M HIT - HULL'S GOING!", "CAN'T SHAKE HIM!", "SIX, I NEED COVER!", NULL },
-        [CHAT_SWARMED] = { "THEY'RE ALL OVER ME!", "TOO MANY - HELP!", NULL, NULL },
+        [CHAT_KILL]    = { "SCRATCH ONE, ASSHOLE!", "TOO FUCKIN' EASY.", "WHO'S NEXT?! COME ON!",
+                            "THAT'S HOW IT'S DONE.", "LIGHTS OUT, DIPSHIT.", "ANOTHER ONE BITES IT." },
+        [CHAT_BUDDY]   = { "NO - FUCK, I'VE GOT YOU!", "THEY'LL PAY FOR THAT ONE.",
+                            "GODDAMMIT. NOT HIM.", "HE WAS RIGHT THERE. FUCK.", NULL, NULL },
+        [CHAT_HURT]    = { "I'M HIT - HULL'S GOIN'!", "CAN'T SHAKE THE BASTARD!",
+                            "SIX, I NEED COVER NOW!", "FUCK FUCK FUCK I'M LEAKING!",
+                            "MY WING'S GONE. STILL FLYING.", "I'M FINE! I'M NOT FINE!" },
+        [CHAT_SWARMED] = { "THEY'RE ALL OVER ME!", "TOO MANY - HELP, DAMMIT!",
+                            "GET THESE CLOWNS OFF ME!", "OKAY. THIS IS ACTUALLY BAD.", NULL, NULL },
         [CHAT_IDLE]    = { "THAT WAS MY KILL, JUNO.", "KEEP UP, KIDS.", "I COULD DO THIS ALONE.",
-                            "SLOW TODAY, SIX." },
-        [CHAT_WAVE]    = { "HERE THEY COME. FINALLY.", "MORE TARGETS. GOOD.", NULL, NULL },
-        [CHAT_CLEAR]   = { "THAT ALL YOU GOT?", "SKY'S EMPTY. BORING.", NULL, NULL },
-        [CHAT_REPLY]   = { "YEAH, YEAH.", "SAYS THE ONE WHO MISSED.", "NOTED, JUNO.", NULL },
+                            "SLOW TODAY, SIX.", "ANYONE ELSE HUNGRY?", "WHY AM I EVEN HERE?" },
+        [CHAT_WAVE]    = { "HERE THEY COME. FINALLY.", "MORE TARGETS. GOOD.",
+                            "OH GOOD, MORE OF THEM.", "FRESH MEAT INBOUND.", NULL, NULL },
+        [CHAT_CLEAR]   = { "THAT ALL YOU GOT?", "SKY'S EMPTY. BORING.", "IS THAT IT? WEAK.",
+                            "I'M ALMOST DISAPPOINTED.", NULL, NULL },
+        [CHAT_REPLY]   = { "YEAH, YEAH.", "SAYS THE ONE WHO MISSED.", "NOTED, JUNO.",
+                            "SURE, WHATEVER YOU SAY.", "COOL STORY, BIT.", "BLAME THE WIND, HUH?" },
+        [CHAT_RALLY]   = { "ON IT. MOVE IT!", "YEAH YEAH, I HEARD YOU.", "HOLD ON TO YOUR ASS!",
+                            "COMING THROUGH!", "SAVE SOME FOR ME!", "ALREADY THERE, SIX." },
+        [CHAT_LOOT]    = { "MINE. BACK OFF.", "OH HELL YES.", "SHINY.", "THIS IS COMING WITH ME.",
+                            "I CALL DIBS.", "DON'T TOUCH MY CRATE." },
     },
 
     /* --------------------------------------------------------- JUNO ----
-       The steady one. Protective, unimpressed, keeps the formation honest. */
+       The steady one. Protective, unimpressed, keeps the formation honest -
+       and swears exactly once per crisis, precisely aimed. */
     [ALLY_JUNO] = {
-        [CHAT_KILL]    = { "TARGET DOWN.", "CLEAN KILL.", "THREAT REMOVED.", "CONFIRMED SPLASH." },
-        [CHAT_BUDDY]   = { "WE LOST A WINGMAN.", "COVER ME. I'M ALONE BACK HERE.", NULL, NULL },
+        [CHAT_KILL]    = { "TARGET DOWN.", "CLEAN KILL.", "THREAT REMOVED.", "CONFIRMED SPLASH.",
+                            "DOWN AND STAYING DOWN.", "ONE LESS." },
+        [CHAT_BUDDY]   = { "WE LOST A WINGMAN.", "COVER ME. I'M ALONE BACK HERE.",
+                            "DAMN. HE'S GONE.", "THAT ONE'S ON ALL OF US.", NULL, NULL },
         [CHAT_HURT]    = { "STRUCTURAL DAMAGE. I'M LEAKING.", "I NEED ASSISTANCE.",
-                            "MY HULL IS THIN, SIX.", NULL },
-        [CHAT_SWARMED] = { "I'M SURROUNDED. REQUEST SUPPORT.", "THEY'VE BOXED ME IN.", NULL, NULL },
+                            "MY HULL IS THIN, SIX.", "I CAN'T TAKE ANOTHER ONE.",
+                            "TAKING FIRE. STILL HERE.", "THIS IS GETTING OLD." },
+        [CHAT_SWARMED] = { "I'M SURROUNDED. SUPPORT?", "THEY'VE BOXED ME IN.",
+                            "THIS IS GETTING RIDICULOUS.", "SIX. NOW WOULD BE GOOD.", NULL, NULL },
         [CHAT_IDLE]    = { "STAY IN FORMATION.", "CHECK YOUR SIX, BIT.", "SIX, WATCH YOUR HULL.",
-                            "FUEL'S FINE. NERVES AREN'T." },
-        [CHAT_WAVE]    = { "NEW CONTACTS INBOUND.", "BRACE.", NULL, NULL },
-        [CHAT_CLEAR]   = { "AREA CLEAR. REGROUP.", "GOOD WORK, TEAM.", NULL, NULL },
-        [CHAT_REPLY]   = { "UNDERSTOOD.", "AS YOU SAY.", "COPY THAT, VEX.", NULL },
+                            "FUEL'S FINE. NERVES AREN'T.", "WHO KEEPS HUMMING?", "I HATE THIS PLANET." },
+        [CHAT_WAVE]    = { "NEW CONTACTS INBOUND.", "BRACE.", "HERE WE GO AGAIN.",
+                            "THEY BROUGHT FRIENDS.", NULL, NULL },
+        [CHAT_CLEAR]   = { "AREA CLEAR. REGROUP.", "GOOD WORK, TEAM.", "BREATHE, PEOPLE.",
+                            "THAT WENT WELL. SUSPICIOUS.", NULL, NULL },
+        [CHAT_REPLY]   = { "UNDERSTOOD.", "AS YOU SAY.", "COPY THAT, VEX.", "YOU'RE NOT THE BOSS.",
+                            "IF IT MAKES YOU HAPPY.", "WHATEVER HELPS YOU SLEEP." },
+        [CHAT_RALLY]   = { "ON YOUR WING.", "CLOSING. HOLD ON.", "FORMING UP.",
+                            "MOVING TO YOU NOW.", "RIGHT BEHIND YOU.", "COVERING YOUR SIX." },
+        [CHAT_LOOT]    = { "TOOK IT.", "GRABBED IT.", "NEEDED THAT.", "PERFECT TIMING.",
+                            "I'LL TAKE IT.", "USEFUL." },
     },
 
     /* ---------------------------------------------------------- BIT ----
        The rookie. Brilliant with the seeker rack, terrified of everything. */
     [ALLY_BIT] = {
         [CHAT_KILL]    = { "OH! GOT HIM! GOT HIM!", "DID YOU SEE THAT?!",
-                            "AWAY- AND IT HIT! WOW.", "I DID A KILL! I MEAN- A KILL!" },
-        [CHAT_BUDDY]   = { "OH NO. OH NO OH NO.", "ANSWER ME! PLEASE ANSWER!", NULL, NULL },
-        [CHAT_HURT]    = { "AAAH MY HULL!", "I'M HIT I'M HIT I'M HIT!", "SOMEONE HELP!", NULL },
-        [CHAT_SWARMED] = { "THEY'RE EVERYWHERE!", "SIX! VEX! ANYONE!", NULL, NULL },
-        [CHAT_IDLE]    = { "UH. IS THE LEAD SUPPOSED TO DO THAT?",
-                            "MY SENSORS ARE SCREAMING. JUST SAYING.",
-                            "I'M FINE. TOTALLY FINE.", "DO WE GET PAID FOR THIS?" },
-        [CHAT_WAVE]    = { "OH NO. HERE THEY COME.", "I DON'T LIKE THIS.", NULL, NULL },
-        [CHAT_CLEAR]   = { "WE LIVED! WE LIVED!", "IS IT OVER? IS IT OVER?", NULL, NULL },
-        [CHAT_REPLY]   = { "OKAY OKAY OKAY!", "R-RIGHT!", "COPY! I THINK! YES! COPY!" },
+                            "AWAY- AND IT HIT! WOW.", "I DID A KILL! I MEAN- A KILL!",
+                            "HAHAHA HE EXPLODED!", "AM I GOOD AT THIS?!" },
+        [CHAT_BUDDY]   = { "OH NO. OH NO OH NO.", "ANSWER ME! PLEASE ANSWER!",
+                            "HE'S GONE HE'S GONE HE'S GONE.", "IT WASN'T SUPPOSED TO DO THAT.",
+                            NULL, NULL },
+        [CHAT_HURT]    = { "AAAH MY HULL!", "I'M HIT I'M HIT I'M HIT!", "SOMEONE HELP!",
+                            "MY LEG! ...I DON'T HAVE LEGS.", "FFFFF- I'M OKAY. SORT OF.",
+                            "THIS HURTS SO MUCH!" },
+        [CHAT_SWARMED] = { "THEY'RE EVERYWHERE!", "SIX! VEX! ANYONE!", "TOO MANY TOO MANY TOO MANY!",
+                            "I HATE THIS I HATE THIS!", NULL, NULL },
+        [CHAT_IDLE]    = { "UH. IS THE LEAD SUPPOSED TO DO THAT?", "MY SENSORS ARE SCREAMING.",
+                            "I'M FINE. TOTALLY FINE.", "DO WE GET PAID FOR THIS?",
+                            "I THINK I LEFT THE STOVE ON.", "MY HANDS ARE SHAKING. COOL." },
+        [CHAT_WAVE]    = { "OH NO. HERE THEY COME.", "I DON'T LIKE THIS.", "NOT AGAIN NOT AGAIN.",
+                            "WHY ARE THERE SO MANY?!", NULL, NULL },
+        [CHAT_CLEAR]   = { "WE LIVED! WE LIVED!", "IS IT OVER? IS IT OVER?", "I NEED A MINUTE.",
+                            "HAHAHA WE'RE ALIVE?!", NULL, NULL },
+        [CHAT_REPLY]   = { "OKAY OKAY OKAY!", "R-RIGHT!", "COPY! I THINK! YES! COPY!", "SORRY! SORRY!",
+                            "YES SIR! I MEAN- YES!", "THAT'S NOT HELPING!" },
+        [CHAT_RALLY]   = { "ON MY WAY! ON MY WAY!", "COMING! I'M COMING!", "WAIT FOR ME! I'M LATE!",
+                            "DON'T LEAVE ME!", "OKAY OKAY I'M COMING!", "COMING COMING COMING!" },
+        [CHAT_LOOT]    = { "OH! SHINY!", "IS THIS MINE? IT'S MINE.", "I FOUND SOMETHING!",
+                            "WAIT, WAS THAT YOURS?", "OOPS. MINE NOW.", "HEHEHE. PRESENTS." },
     },
 };
 
@@ -174,8 +212,8 @@ void ChatUpdate(float dt)
 
     /* nobody is talking: eventually somebody gets bored */
     g.chatIdle += dt;
-    if (g.chatIdle > 7.5f) {
-        g.chatIdle = -GetRandomValue(0, 60) * 0.05f;   /* small random gap */
+    if (g.chatIdle > 5.5f) {
+        g.chatIdle = -GetRandomValue(0, 40) * 0.05f;   /* small random gap */
 
         int alive[MAX_ALLIES];
         int n = 0;

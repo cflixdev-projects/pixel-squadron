@@ -217,6 +217,28 @@ void SpawnPopup(Vector2 pos, const char *text, Color color)
     }
 }
 
+/* What each kind looks like. There are only three enemy hulls on the sheet,
+   so the paint job and the scale carry the identity: a yellow speck is a dart,
+   a violet dart-plane is a sniper, green is a splitter, gold is the tender. */
+typedef struct {
+    int    sprite;
+    float  scale;
+    Color  tint;
+} EnemyLook;
+
+static EnemyLook EnemyLookOf(EnemyKind k)
+{
+    switch (k) {
+        case ENEMY_RAIDER:   return (EnemyLook){ SHIP_ENEMY_RAIDER, 1.00f, (Color){ 255, 255, 255, 255 } };
+        case ENEMY_HEAVY:    return (EnemyLook){ SHIP_ENEMY_HEAVY,  1.00f, (Color){ 255, 255, 255, 255 } };
+        case ENEMY_DART:     return (EnemyLook){ SHIP_ENEMY_SCOUT,  0.70f, (Color){ 255, 214, 110, 255 } };
+        case ENEMY_LANCER:   return (EnemyLook){ SHIP_ENEMY_RAIDER, 1.10f, (Color){ 198, 150, 255, 255 } };
+        case ENEMY_SPLITTER: return (EnemyLook){ SHIP_ENEMY_HEAVY,  0.85f, (Color){ 140, 235, 150, 255 } };
+        case ENEMY_TENDER:   return (EnemyLook){ SHIP_ENEMY_RAIDER, 1.15f, (Color){ 255, 240, 150, 255 } };
+        default:             return (EnemyLook){ SHIP_ENEMY_SCOUT,  1.00f, (Color){ 255, 255, 255, 255 } };
+    }
+}
+
 void SpawnEnemy(EnemyKind kind, Vector2 pos)
 {
     static int cursor = 0;
@@ -245,6 +267,39 @@ void SpawnEnemy(EnemyKind kind, Vector2 pos)
             e->fireTimer = 1.8f;
             e->score  = 40;
             break;
+
+        case ENEMY_DART:
+            /* one good shot kills it; the danger is the swarm and the ram */
+            e->hp    = 1.2f + d * 0.45f;
+            e->radius = 6.5f;
+            e->orbit  = 40.0f + (float)GetRandomValue(0, 26);
+            e->fireTimer = 2.6f;
+            e->score  = 8;
+            break;
+        case ENEMY_LANCER:
+            e->hp    = 4.5f + d * 1.5f;
+            e->radius = 11.0f;
+            e->orbit  = 235.0f + (float)GetRandomValue(0, 55);
+            e->fireTimer = 1.6f;
+            e->score  = 35;
+            break;
+        case ENEMY_SPLITTER:
+            e->hp    = 5.0f + d * 1.7f;
+            e->radius = 13.0f;
+            e->orbit  = 92.0f + (float)GetRandomValue(0, 30);
+            e->fireTimer = 1.5f;
+            e->score  = 25;
+            break;
+        case ENEMY_TENDER:
+            /* barely armed and not that tough: the threat is what it keeps
+               alive, so the player has a reason to go hunting in the back */
+            e->hp    = 5.5f + d * 1.4f;
+            e->radius = 12.0f;
+            e->orbit  = 255.0f + (float)GetRandomValue(0, 40);
+            e->fireTimer = 2.4f;
+            e->score  = 45;
+            break;
+
         case ENEMY_SCOUT:
         default:
             kind     = ENEMY_SCOUT;
@@ -265,6 +320,7 @@ void SpawnEnemy(EnemyKind kind, Vector2 pos)
     e->wobble    = (float)GetRandomValue(0, 359) * DEG2RAD;
     e->spawnFade = ENEMY_SPAWN_FADE;
     e->hitFlash  = 0.0f;
+    e->charge    = 0.0f;
 }
 
 void EnemiesClear(void)
@@ -288,8 +344,10 @@ void EntitiesReset(void)
     for (int i = 0; i < MAX_BURSTS; i++)    g.bursts[i].alive    = false;
     for (int i = 0; i < MAX_POPUPS; i++)    g.popups[i].alive    = false;
 
-    g.rallyCool = 0.0f;
-    g.crits     = 0;
+    g.rallyCool  = 0.0f;
+    g.rallyTimer = 0.0f;
+    g.crits      = 0;
+    for (int i = 0; i < MAX_ALLIES; i++) g.allyKills[i] = 0;
 
     /* Start over the most land-rich part of whatever the arena generator just
        produced, so the first wave does not have to be found across an ocean. */
@@ -520,11 +578,11 @@ void DamageEnemy(Enemy *e, float amount)
     g.score += e->score;
     g.kills++;
 
-    bool heavy = (e->kind == ENEMY_HEAVY);
-    SpawnBurst(e->pos, heavy ? 1.6f : 1.0f);
-    SpawnBurstParticles(e->pos, heavy ? 1.9f : 1.0f, (Color){ 255, 236, 159, 255 });
+    bool big = (e->kind == ENEMY_HEAVY || e->kind == ENEMY_SPLITTER);
+    SpawnBurst(e->pos, big ? 1.6f : 1.0f);
+    SpawnBurstParticles(e->pos, big ? 1.9f : 1.0f, (Color){ 255, 236, 159, 255 });
 
-    if (heavy) {
+    if (big) {
         g.shake   = fmaxf(g.shake, 9.0f);
         g.hitStop = fmaxf(g.hitStop, 0.06f);
         PlaySfx(assets.explosionBig, 0.5f, 1.0f);
@@ -533,13 +591,27 @@ void DamageEnemy(Enemy *e, float amount)
         PlaySfx(assets.explosion, 0.30f, 1.0f);
     }
 
+    /* The splitter comes apart into two darts. Kill it at range. */
+    if (e->kind == ENEMY_SPLITTER) {
+        for (int i = 0; i < 2; i++) {
+            Vector2 off = V2((float)GetRandomValue(-14, 14), (float)GetRandomValue(-14, 14));
+            SpawnEnemy(ENEMY_DART, V2Add(e->pos, off));
+        }
+        SpawnBurstParticles(e->pos, 0.9f, (Color){ 140, 235, 150, 255 });
+    }
+
     /* Loot table. */
     int  roll   = GetRandomValue(0, 99);
-    int  chance = (e->kind == ENEMY_HEAVY)  ? 70
-                : (e->kind == ENEMY_RAIDER) ? 12
-                                            : 10;
+    int  chance = (e->kind == ENEMY_HEAVY)    ? 70
+                : (e->kind == ENEMY_TENDER)   ? 60
+                : (e->kind == ENEMY_SPLITTER) ? 40
+                : (e->kind == ENEMY_LANCER)   ? 28
+                : (e->kind == ENEMY_RAIDER)   ? 12
+                                              : 10;
     PickupKind kind = (e->kind == ENEMY_HEAVY)  ? PICK_POWER
-                    : (e->kind == ENEMY_RAIDER) ? PICK_SHIELD
+                    : (e->kind == ENEMY_TENDER) ? PICK_SHIELD
+                    : (e->kind == ENEMY_RAIDER ||
+                       e->kind == ENEMY_LANCER) ? PICK_SHIELD
                                                 : PICK_HEALTH;
 
     if (roll < chance) SpawnPickup(kind, e->pos);
@@ -571,6 +643,55 @@ static void EnemyShoot(Enemy *e)
             PlaySfx(assets.enemyShoot, 0.20f, 1.25f);
             break;
 
+        /* Squeezed off at knife range, so the dart has to earn it. */
+        case ENEMY_DART: {
+            float a = base + (float)GetRandomValue(-10, 10) * DEG2RAD;
+            Vector2 d = V2(cosf(a), sinf(a));
+            SpawnBullet(V2Add(e->pos, V2Scale(d, 8.0f)), V2Scale(d, ENEMY_BULLET_SPD * 1.05f),
+                        TILE_BOLT_WHITE, ENEMY_BULLET_DMG * 0.7f, 1.8f, 0.8f, BULLET_ENEMY, -1);
+            PlaySfx(assets.enemyShoot, 0.14f, 1.5f);
+            break;
+        }
+
+        /* The payoff for standing off: one fast, heavy, dead-straight bolt. */
+        case ENEMY_LANCER: {
+            Vector2 d = V2(cosf(base), sinf(base));
+            SpawnBullet(V2Add(e->pos, V2Scale(d, 16.0f)), V2Scale(d, ENEMY_BULLET_SPD * 2.1f),
+                        TILE_BOLT_WHITE, ENEMY_BULLET_DMG * 2.4f, 3.2f, 1.5f, BULLET_ENEMY, -1);
+            SpawnBurstParticles(V2Add(e->pos, V2Scale(d, 14.0f)), 0.35f,
+                                (Color){ 198, 150, 255, 255 });
+            PlaySfx(assets.enemyShoot, 0.26f, 0.7f);
+            break;
+        }
+
+        /* A wide, weak spray: it is trying to keep you off, not kill you. */
+        case ENEMY_SPLITTER:
+            for (int i = -2; i <= 2; i++) {
+                Vector2 d = V2(cosf(base + 0.22f * (float)i), sinf(base + 0.22f * (float)i));
+                SpawnBullet(V2Add(e->pos, V2Scale(d, 12.0f)),
+                            V2Scale(d, ENEMY_BULLET_SPD * 0.75f),
+                            TILE_BOLT_WHITE, ENEMY_BULLET_DMG * 0.6f, 1.9f, 0.9f, BULLET_ENEMY, -1);
+            }
+            PlaySfx(assets.enemyShoot, 0.22f, 0.95f);
+            break;
+
+        /* Not a gun at all: the tender's pulse fixes up everything nearby. */
+        case ENEMY_TENDER: {
+            float reach = 150.0f;
+            for (int i = 0; i < MAX_ENEMIES; i++) {
+                Enemy *o = &g.enemies[i];
+                if (!o->alive || o->spawnFade > 0.0f) continue;
+                if (Dist2(o->pos, e->pos) > reach * reach) continue;
+
+                o->hp = fminf(o->maxHp, o->hp + 1.6f + g.difficulty * 0.25f);
+                SpawnBurstParticles(o->pos, 0.25f, (Color){ 150, 240, 170, 255 });
+            }
+            /* and a little for itself, so a lone tender is not free score */
+            e->hp = fminf(e->maxHp, e->hp + 0.8f);
+            PlaySfx(assets.pickup, 0.16f, 1.6f);
+            break;
+        }
+
         default: {
             float a = base + (float)GetRandomValue(-4, 4) * DEG2RAD;
             Vector2 d = V2(cosf(a), sinf(a));
@@ -594,9 +715,13 @@ void EnemiesUpdate(float dt)
         if (e->hitFlash  > 0.0f) e->hitFlash  -= dt * 5.0f;
         if (e->spawnFade > 0.0f) e->spawnFade -= dt;
 
-        float baseSpeed = (e->kind == ENEMY_RAIDER) ? 104.0f
-                        : (e->kind == ENEMY_HEAVY)  ?  46.0f
-                                                    :  78.0f;
+        float baseSpeed = (e->kind == ENEMY_RAIDER)   ? 104.0f
+                        : (e->kind == ENEMY_HEAVY)    ?  46.0f
+                        : (e->kind == ENEMY_DART)     ? 158.0f
+                        : (e->kind == ENEMY_LANCER)   ?  72.0f
+                        : (e->kind == ENEMY_SPLITTER) ?  60.0f
+                        : (e->kind == ENEMY_TENDER)   ?  76.0f
+                                                      :  78.0f;
         float speed = baseSpeed * speedScale;
 
         /* Everything hunts whichever of us is closest - that is what makes the
@@ -608,7 +733,12 @@ void EnemiesUpdate(float dt)
 
         /* Circle-strafe: steer toward a slowly rotating point on a ring
            around the target, so the swarm orbits instead of piling up. */
-        float spin  = (e->kind == ENEMY_HEAVY) ? 0.35f : 0.85f;
+        float spin  = (e->kind == ENEMY_HEAVY)    ? 0.35f
+                    : (e->kind == ENEMY_DART)     ? 1.65f
+                    : (e->kind == ENEMY_LANCER)   ? 0.28f
+                    : (e->kind == ENEMY_SPLITTER) ? 0.55f
+                    : (e->kind == ENEMY_TENDER)   ? 0.30f
+                                                  : 0.85f;
         float angle = atan2f(-toPlayer.y, -toPlayer.x) + e->wobble + g.time * spin;
         Vector2 anchor = V2Add(focus,
                                V2(cosf(angle) * e->orbit, sinf(angle) * e->orbit));
@@ -643,21 +773,39 @@ void EnemiesUpdate(float dt)
 
         /* shooting */
         e->fireTimer -= dt;
-        if (e->fireTimer <= 0.0f && e->spawnFade <= 0.0f &&
-            dist < ENEMY_AGGRO_RANGE) {
 
+        bool mayFire = (e->fireTimer <= 0.0f && e->spawnFade <= 0.0f &&
+                        dist < ENEMY_AGGRO_RANGE);
+
+        if (e->kind == ENEMY_LANCER) {
+            /* The lancer lines up in plain sight: a long charge, then one very
+               fast bolt. You can see it coming and break the line, or kill it
+               mid-charge - which is the whole point of the tell. */
+            if (e->charge > 0.0f) {
+                e->charge -= dt;
+                if (e->charge <= 0.0f) {
+                    EnemyShoot(e);
+                    e->fireTimer = 2.30f * fireScale * (0.9f + (float)GetRandomValue(0, 25) / 100.0f);
+                }
+            } else if (mayFire && dist < 460.0f) {
+                e->charge = 1.05f;
+            }
+        } else if (mayFire) {
             EnemyShoot(e);
 
-            float base = (e->kind == ENEMY_RAIDER) ? 1.05f
-                       : (e->kind == ENEMY_HEAVY)  ? 2.10f
-                                                   : 1.55f;
+            float base = (e->kind == ENEMY_RAIDER)   ? 1.05f
+                       : (e->kind == ENEMY_HEAVY)    ? 2.10f
+                       : (e->kind == ENEMY_DART)     ? 2.60f
+                       : (e->kind == ENEMY_SPLITTER) ? 1.65f
+                       : (e->kind == ENEMY_TENDER)   ? 2.75f
+                                                     : 1.55f;
             e->fireTimer = base * fireScale * (0.85f + (float)GetRandomValue(0, 30) / 100.0f);
         }
 
-        /* ramming hurts whoever gets hit */
+        /* ramming hurts whoever gets hit - and for a dart that is the plan */
         if (g.player.alive && Dist2(e->pos, g.player.pos) <
             (e->radius + PLAYER_RADIUS) * (e->radius + PLAYER_RADIUS)) {
-            PlayerDamage(14.0f);
+            PlayerDamage((e->kind == ENEMY_DART) ? 9.0f : 14.0f);
             e->vel = V2Scale(dir, -1.0f * 150.0f);
         }
 
@@ -680,19 +828,45 @@ void EnemiesDraw(void)
         Enemy *e = &g.enemies[i];
         if (!e->alive) continue;
 
-        int sprite = (e->kind == ENEMY_RAIDER) ? SHIP_ENEMY_RAIDER
-                   : (e->kind == ENEMY_HEAVY)  ? SHIP_ENEMY_HEAVY
-                                               : SHIP_ENEMY_SCOUT;
+        EnemyLook look = EnemyLookOf(e->kind);
 
         Color tint = HitTint(e->hitFlash);
+        tint = (Color){ (unsigned char)((unsigned int)tint.r * look.tint.r / 255u),
+                        (unsigned char)((unsigned int)tint.g * look.tint.g / 255u),
+                        (unsigned char)((unsigned int)tint.b * look.tint.b / 255u),
+                        tint.a };
         if (e->spawnFade > 0.0f) {
             tint.a = (unsigned char)(255.0f * (1.0f - e->spawnFade / ENEMY_SPAWN_FADE));
         }
 
-        DrawShip(sprite, e->pos, e->angle * RAD2DEG + ART_FORWARD, 1.0f, tint);
+        /* The tender broadcasts: a slow pulse so it is obvious who is keeping
+           the swarm alive, and obviously worth killing first. */
+        if (e->kind == ENEMY_TENDER && e->spawnFade <= 0.0f) {
+            float pulse = 0.5f + 0.5f * sinf(g.time * 3.4f + e->wobble);
+            DrawCircleLines((int)floorf(e->pos.x), (int)floorf(e->pos.y),
+                            24.0f + pulse * 6.0f,
+                            (Color){ 255, 240, 150, (unsigned char)(60.0f + 70.0f * pulse) });
+        }
+
+        /* The lancer's charge-up, drawn as a growing bead of light down the
+           barrel: the longer it has been charging, the brighter it gets. */
+        if (e->kind == ENEMY_LANCER && e->charge > 0.0f) {
+            float k = Clamp(1.0f - e->charge / 1.05f, 0.0f, 1.0f);
+            Vector2 dir = V2(cosf(e->angle), sinf(e->angle));
+            Vector2 tip = V2Add(e->pos, V2Scale(dir, 15.0f));
+            float   len = 4.0f + k * 12.0f;
+
+            DrawLineEx(e->pos, V2Add(e->pos, V2Scale(dir, 15.0f + len)),
+                       1.0f, (Color){ 198, 150, 255, (unsigned char)(90.0f + 140.0f * k) });
+            DrawCircleV(tip, 1.5f + k * 2.0f,
+                        (Color){ 235, 215, 255, (unsigned char)(150.0f + 105.0f * k) });
+        }
+
+        DrawShip(look.sprite, e->pos, e->angle * RAD2DEG + ART_FORWARD,
+                 look.scale, tint);
 
         /* health bar for the ships that can take a beating */
-        if (e->kind != ENEMY_SCOUT && e->hp < e->maxHp) {
+        if (e->kind != ENEMY_SCOUT && e->kind != ENEMY_DART && e->hp < e->maxHp) {
             float ratio = Clamp(e->hp / e->maxHp, 0.0f, 1.0f);
             int   x = (int)(e->pos.x - 9.0f);
             int   y = (int)(e->pos.y - 20.0f);
@@ -801,6 +975,35 @@ static int EnemiesNear(Vector2 from, float radius)
     return n;
 }
 
+/* Does this crate offer something the wingman actually needs? A hurt pilot
+   wants the repair; one flying with nothing running will still take a weapon
+   or a shield, because that is what keeps them alive out here. */
+static bool AllyWantsPickup(const Ally *a, const Pickup *p)
+{
+    switch (p->kind) {
+        case PICK_HEALTH: return a->hp < a->maxHp * 0.62f;
+        case PICK_POWER:  return a->powerTimer  <= 0.0f;
+        case PICK_SHIELD: return a->shieldTimer <= 0.0f;
+    }
+    return false;
+}
+
+/* The nearest crate worth a detour, or NULL. */
+static Pickup *AllyFindLoot(const Ally *a)
+{
+    Pickup *best  = NULL;
+    float   bestD = ALLY_CRATE_RANGE * ALLY_CRATE_RANGE;
+
+    for (int i = 0; i < MAX_PICKUPS; i++) {
+        Pickup *p = &g.pickups[i];
+        if (!p->alive || !AllyWantsPickup(a, p)) continue;
+
+        float d = Dist2(p->pos, a->pos);
+        if (d < bestD) { bestD = d; best = p; }
+    }
+    return best;
+}
+
 /* The wingman raises the alarm: the others break off and come running, and
    the HUD puts a red marker on the map until they are out of trouble. */
 void AllyCallForHelp(Ally *a)
@@ -826,6 +1029,9 @@ void AllyCallForHelp(Ally *a)
 void AllyDamage(Ally *a, float amount)
 {
     if (!a->alive || a->spawnFade > 0.0f) return;   /* still materialising */
+
+    /* A shield crate soaks most of the hit - that is what they grabbed it for */
+    if (a->shieldTimer > 0.0f) amount *= 0.30f;
 
     a->hp      -= amount;
     a->hitFlash = 1.0f;
@@ -861,20 +1067,58 @@ void AllyDamage(Ally *a, float amount)
  *
  *  A wingman is only as good as the kit they are flying, and the swarm gets
  *  meaner every wave. Rather than making the player carry the whole squadron
- *  forever, the wing is rearmed as the waves climb: more hull, harder-hitting
- *  rounds, quicker reloads and specials that come back sooner. Their strength
- *  tracks the wave number directly so it is always in step with the enemy
- *  scaling curve and a long run still ends the same way - badly.
+ *  forever, the wing gets better in two ways at once:
+ *
+ *    - every kill the wing scores together is a small, permanent trickle of
+ *      skill: quicker on the stick, quicker on the trigger, hitting harder;
+ *    - and every fifth wave they are formally rearmed - a flat few percent on
+ *      everything, plus a new hull ceiling.
+ *
+ *  Both of those ride on top of the per-wave rank, so a long run keeps the
+ *  wing in the fight instead of watching them evaporate in wave six.
  * ----------------------------------------------------------------------- */
-static float AllyRank(void)       { return (float)(g.wave > 0 ? g.wave - 1 : 0); }
-static float AllyMaxHpForRank(void){ return ALLY_MAX_HP + AllyRank() * ALLY_RANK_HP; }
-static float AllyDamageMul(void)  { return 1.0f + AllyRank() * ALLY_RANK_DMG; }
-static float AllyFireMul(void)    { return fmaxf(0.55f, 1.0f - AllyRank() * ALLY_RANK_FIRE); }
-static float AllyCoolMul(void)    { return fmaxf(0.50f, 1.0f - AllyRank() * ALLY_RANK_COOL); }
+#define ALLY_KILL_STEP 0.010f   /* +1% (of the wing's total) per kill     */
+#define ALLY_KILL_CAP  0.75f    /* ...up to +75% from kills alone         */
+#define ALLY_VET_STEP  0.06f    /* +6% every five waves                   */
+#define ALLY_VET_CAP   2.20f    /* however long you last, this is the end */
+#define ALLY_SPEED_CAP 1.30f    /* they still have to fly with the player */
 
-/* Called at the top of every wave: their hulls grow and they are patched up
-   to the new ceiling, so being rearmed reads as a reward rather than a
-   free full heal. */
+static int AllyKills(void)
+{
+    int n = 0;
+    for (int i = 0; i < MAX_ALLIES; i++) n += g.allyKills[i];
+    return n;
+}
+
+/* One number for "how seasoned is this wing". */
+static float AllyVet(void)
+{
+    float kills = fminf((float)AllyKills() * ALLY_KILL_STEP, ALLY_KILL_CAP);
+    float waves = (float)(g.wave / 5) * ALLY_VET_STEP;
+
+    return fminf(1.0f + kills + waves, ALLY_VET_CAP);
+}
+
+static float AllyRank(void)       { return (float)(g.wave > 0 ? g.wave - 1 : 0); }
+static float AllyMaxHpForRank(void){ return (ALLY_MAX_HP + AllyRank() * ALLY_RANK_HP) * AllyVet(); }
+static float AllyDamageMul(void)  { return (1.0f + AllyRank() * ALLY_RANK_DMG) * AllyVet(); }
+static float AllyFireMul(void)    { return fmaxf(0.38f, (1.0f - AllyRank() * ALLY_RANK_FIRE) / AllyVet()); }
+static float AllyCoolMul(void)    { return fmaxf(0.38f, (1.0f - AllyRank() * ALLY_RANK_COOL) / AllyVet()); }
+static float AllySpeedMul(void)   { return fminf(AllyVet(), ALLY_SPEED_CAP); }
+
+/* Bring one wingman's hull up to what the wing has earned. Called every frame,
+   because the trickle from kills means the ceiling is always creeping up. */
+static void AllyRefreshRank(Ally *a)
+{
+    float maxHp = AllyMaxHpForRank();
+    if (maxHp <= a->maxHp) return;
+
+    if (a->alive) a->hp += (maxHp - a->maxHp);   /* the new plating comes fitted */
+    a->maxHp = maxHp;
+}
+
+/* Called at the top of every wave: everyone is patched up to the new ceiling,
+   so being rearmed reads as a reward rather than a free full heal. */
 void AlliesUpgrade(void)
 {
     float maxHp = AllyMaxHpForRank();
@@ -889,8 +1133,17 @@ void AlliesUpgrade(void)
     }
 }
 
-/* The player's recall. Everyone drops what they are doing, sprints back and
-   holds station until the danger passes. */
+/* The second voice on the radio when the wing is recalled: each pilot's own
+   idea of "on my way". */
+static const char *const kRallyEcho[ALLY_ROLE_COUNT] = {
+    "YEAH YEAH, I'M COMING.",        /* VEX  */
+    "ON YOUR WING. HOLD FORMATION.", /* JUNO */
+    "ON MY WAY! ON MY WAY! MOVE!",   /* BIT  */
+};
+
+/* The player's recall. Everyone breaks off, sprints back, then holds station
+   around the player with their guns live - it is a call for backup, not a
+   call for a formation flight. */
 void AlliesRally(void)
 {
     if (g.rallyCool > 0.0f) return;
@@ -905,18 +1158,31 @@ void AlliesRally(void)
     }
     if (n == 0) return;
 
-    g.rallyCool = RALLY_COOLDOWN;
+    g.rallyCool  = RALLY_COOLDOWN;
+    g.rallyTimer = RALLY_TIME;
 
     TextCopy(g.message, "RALLY - ON ME");
     g.messageTimer = 1.4f;
     PlaySfx(assets.pickup, 0.30f, 1.45f);
 
-    /* one of them answers, and it is always the cocky one if VEX is flying */
-    static const char *const kAck[ALLY_ROLE_COUNT] = {
-        "ON YOUR WING!", "CLOSING. HOLD ON.", "COMING! I'M COMING!"
-    };
+    /* one of them answers - every pilot in the wing has their own idea of
+       what "get here now" sounds like */
     int who = alive[GetRandomValue(0, n - 1)];
-    ChatSayText(who, kAck[g.allies[who].role]);
+    ChatSay(who, CHAT_RALLY);
+
+    /* ...and a second voice piles on, because nobody shuts up on this radio */
+    if (n > 1 && GetRandomValue(0, 1) == 0) {
+        int other = alive[GetRandomValue(0, n - 1)];
+        if (other == who) other = alive[(who + 1) % n];
+        ChatSayText(other, kRallyEcho[g.allies[other].role]);
+    }
+}
+
+/* Everything a wingman's gun does, in one number: the wave-scoped rank
+   upgrade, plus the extra bite from a weapon crate if they are flying hot. */
+static float AllyGunMul(const Ally *a)
+{
+    return AllyDamageMul() * ((a->powerTimer > 0.0f) ? 1.5f : 1.0f);
 }
 
 static void AllyShoot(Ally *a)
@@ -926,7 +1192,7 @@ static void AllyShoot(Ally *a)
     Vector2 muzzle = V2Add(a->pos, V2Scale(dir, 11.0f));
 
     SpawnBullet(muzzle, V2Scale(dir, ALLY_BULLET_SPD), TILE_BOLT,
-                ALLY_BULLET_DMG * AllyDamageMul(), 1.3f, 1.0f, BULLET_ALLY, a->slot);
+                ALLY_BULLET_DMG * AllyGunMul(a), 1.3f, 1.0f, BULLET_ALLY, a->slot);
     SpawnBurstParticles(muzzle, 0.18f, pr->hull);
 
     PlaySfx(assets.shoot, 0.10f, 1.35f);
@@ -952,7 +1218,7 @@ void AllySpecial(Ally *a)
                 Vector2 d = V2(cosf(ang), sinf(ang));
                 SpawnBullet(V2Add(a->pos, V2Scale(d, 11.0f)),
                             V2Scale(d, ALLY_BULLET_SPD * 0.94f),
-                            TILE_BOLT, ALLY_BULLET_DMG * 0.7f * AllyDamageMul(),
+                            TILE_BOLT, ALLY_BULLET_DMG * 0.7f * AllyGunMul(a),
                             0.85f, 0.9f, BULLET_ALLY, a->slot);
             }
             SpawnBurstParticles(V2Add(a->pos, V2Scale(dir, 12.0f)), 0.4f, pr->hull);
@@ -992,7 +1258,7 @@ void AllySpecial(Ally *a)
                 Vector2 from = V2Add(V2Add(a->pos, V2Scale(dir, 9.0f)),
                                      V2Scale(side, 4.0f * (float)i));
                 SpawnBullet(from, V2Scale(dir, ALLY_BULLET_SPD * 1.15f), TILE_BOLT,
-                            ALLY_BULLET_DMG * 1.7f * AllyDamageMul(), 1.4f, 1.15f,
+                            ALLY_BULLET_DMG * 1.7f * AllyGunMul(a), 1.4f, 1.15f,
                             BULLET_ALLY, a->slot);
             }
             PlaySfx(assets.pickup, 0.28f, 1.25f);
@@ -1009,7 +1275,7 @@ void AllySpecial(Ally *a)
                 Vector2 d = V2(cosf(ang), sinf(ang));
 
                 Bullet *b = SpawnBullet(from, V2Scale(d, 210.0f), TILE_BOLT,
-                                        ALLY_BULLET_DMG * 1.6f * AllyDamageMul(),
+                                        ALLY_BULLET_DMG * 1.6f * AllyGunMul(a),
                                         2.6f, 1.15f, BULLET_ALLY, a->slot);
                 if (b) b->homing = 5.4f;
 
@@ -1026,6 +1292,10 @@ void AlliesUpdate(float dt)
     for (int i = 0; i < MAX_ALLIES; i++) {
         Ally *a = &g.allies[i];
         a->slot = i;
+
+        /* The wing is always getting a little better: this is where the trickle
+           of shared kill experience lands. */
+        AllyRefreshRank(a);
 
         /* --- waiting to be rebuilt ------------------------------------- */
         if (!a->alive) {
@@ -1046,12 +1316,16 @@ void AlliesUpdate(float dt)
                 a->helpCool     = 3.0f;
                 a->assistTimer  = 0.0f;
                 a->rallyTimer   = 0.0f;
+                a->powerTimer   = 0.0f;
+                a->shieldTimer  = 0.0f;
                 SpawnBurst(a->pos, 0.7f);
 
-                static const char *const kBack[ALLY_ROLE_COUNT] = {
-                    "MISS ME?", "BACK ON YOUR WING.", "I'M ALIVE! I'M ALIVE!"
+                static const char *const kBack[ALLY_ROLE_COUNT][3] = {
+                    { "MISS ME, ASSHOLES?", "BACK. WHO DIED?", "STILL THE BEST ONE HERE." },
+                    { "BACK ON YOUR WING.", "I'M UP. FORMATION.", "RESPONDING." },
+                    { "I'M ALIVE! I'M ALIVE!", "DID YOU MISS ME?!", "I'M BACK! SORRY!" },
                 };
-                ChatSayText(i, kBack[a->role]);
+                ChatSayText(i, kBack[a->role][GetRandomValue(0, 2)]);
             }
             continue;
         }
@@ -1062,6 +1336,8 @@ void AlliesUpdate(float dt)
         /* --- beacon bookkeeping ---------------------------------------- */
         if (a->helpCool > 0.0f) a->helpCool -= dt;
         if (a->rallyTimer > 0.0f) a->rallyTimer -= dt;
+        if (a->powerTimer  > 0.0f) a->powerTimer  -= dt;
+        if (a->shieldTimer > 0.0f) a->shieldTimer -= dt;
 
         if (a->distress > 0.0f) {
             a->distress -= dt;
@@ -1116,14 +1392,30 @@ void AlliesUpdate(float dt)
         }
 
         /* --- answering the player's recall ----------------------------- */
-        /* While the recall is up, nothing is worth chasing: they break off,
-           sprint back and hold station. That is the whole point of the
-           button - the wing arrives when it is called, not when the shooting
-           happens to stop. */
-        float maxSpeed = ALLY_MAX_SPEED;
-        if (a->rallyTimer > 0.0f) {
-            target   = NULL;
-            maxSpeed = ALLY_RALLY_SPEED;
+        /* A recall is a call for backup. They break off whatever they were
+           chasing, sprint back to the player, and then fight from there:
+           once they are on station they keep picking targets and pulling the
+           trigger, which is the entire reason to press the button. */
+        bool  rallying = (a->rallyTimer > 0.0f);
+        float maxSpeed = ALLY_MAX_SPEED * AllySpeedMul();
+        bool  inbound  = false;
+
+        if (rallying) {
+            /* an enemy already shooting the player outranks one we merely
+               happen to be closest to - that is what "backup" means */
+            Enemy *threat = NULL;
+            float  threatD = ALLY_ENGAGE_RANGE * ALLY_ENGAGE_RANGE;
+            for (int k = 0; k < MAX_ENEMIES; k++) {
+                Enemy *e = &g.enemies[k];
+                if (!e->alive || e->spawnFade > 0.0f) continue;
+                float d = Dist2(e->pos, g.player.pos);
+                if (d < threatD) { threatD = d; threat = e; }
+            }
+            if (threat) target = threat;
+
+            float dHome = V2Len(V2Sub(AllyFormationPos(i), a->pos));
+            inbound     = (dHome > ALLY_RALLY_ARRIVE);
+            if (inbound) maxSpeed = ALLY_RALLY_SPEED * AllySpeedMul();
         }
 
         /* --- raise the alarm ------------------------------------------- */
@@ -1141,9 +1433,26 @@ void AlliesUpdate(float dt)
         if (a->assistTimer > 0.0f && V2Len(V2Sub(a->assistAt, a->pos)) > 90.0f)
             home = a->assistAt;
 
+        /* Supply run. A hurt pilot, or one flying with nothing running, will
+           break off for a crate close enough to be worth the trip - and they
+           fight the whole way there, because the leash pulls them back toward
+           the crate rather than off the map. A recall outranks shopping. */
+        Pickup *loot = NULL;
+        if (!rallying && !a->distress) {
+            loot = AllyFindLoot(a);
+            if (loot) home = loot->pos;
+        }
+
         Vector2 desiredVel;
 
-        if (target) {
+        if (inbound) {
+            /* Called home: fly the line and shoot the whole way. The nose
+               points at the player while the guns stay on the target, which
+               is what "backup" looks like from the cockpit. */
+            Vector2 toSlot = V2Sub(home, a->pos);
+            float   d      = V2Len(toSlot);
+            desiredVel = V2Scale(V2Norm(toSlot), fminf(d * 3.2f, maxSpeed));
+        } else if (target) {
             Vector2 toTarget = V2Sub(target->pos, a->pos);
             float   d        = V2Len(toTarget);
             Vector2 dir      = (d > 0.001f) ? V2Scale(toTarget, 1.0f / d) : V2(1.0f, 0.0f);
@@ -1167,10 +1476,12 @@ void AlliesUpdate(float dt)
 
             /* Leash: however good the target looks, never chase so far that we
                lose the player. Without this the whole wing ends up lured away
-               across the map and the player flies alone. */
+               across the map and the player flies alone. Looting gets a longer
+               rope - they still have to actually reach the crate. */
+            float   leash    = loot ? 420.0f : ALLY_LEASH;
             float   homeDist = V2Len(V2Sub(home, a->pos));
-            if (homeDist > ALLY_LEASH) {
-                float t = Clamp((homeDist - ALLY_LEASH) / 140.0f, 0.0f, 1.0f);
+            if (homeDist > leash) {
+                float t = Clamp((homeDist - leash) / 140.0f, 0.0f, 1.0f);
                 desiredVel = V2Add(V2Scale(desiredVel, 1.0f - t),
                                    V2Scale(V2Norm(V2Sub(home, a->pos)),
                                            maxSpeed * t));
@@ -1228,15 +1539,22 @@ void AlliesUpdate(float dt)
         a->specialTimer -= dt;
 
         if (target && a->fireTimer <= 0.0f && a->spawnFade <= 0.0f && aimL > 4.0f) {
-            float aimError = fabsf(WrapAngle(atan2f(toAim.y, toAim.x) - a->angle));
-            if (aimError < 0.30f) {
+            /* A recall puts every gun on the threat, so the wing shoots more
+               loosely on the way in - this is backup, not target practice. */
+            float aimError  = fabsf(WrapAngle(atan2f(toAim.y, toAim.x) - a->angle));
+            float tolerance = (rallying || inbound) ? 0.60f : 0.30f;
+
+            if (aimError < tolerance) {
                 const AllyProfile *pr = AllyProfileOf(a->role);
                 float range = V2Len(V2Sub(target->pos, a->pos));
+
+                /* a weapon crate makes them shoot faster and hit harder */
+                float hot = (a->powerTimer > 0.0f) ? 0.66f : 1.0f;
 
                 if (a->specialTimer <= 0.0f && range < 300.0f) {
                     /* the special is what makes each pilot fly differently */
                     static const char *const kCry[ALLY_ROLE_COUNT] = {
-                        "SCATTER OUT!", "AEGIS UP!", "WASPS AWAY!"
+                        "SCATTER, ASSHOLES!", "AEGIS UP.", "WASPS AWAY! RUN! ...THEY RUN!"
                     };
 
                     AllySpecial(a);
@@ -1244,10 +1562,10 @@ void AlliesUpdate(float dt)
 
                     a->specialTimer = pr->cooldown * AllyCoolMul() *
                                       (0.85f + (float)GetRandomValue(0, 30) / 100.0f);
-                    a->fireTimer    = ALLY_FIRE_TIME * AllyFireMul() * 1.7f;
+                    a->fireTimer    = ALLY_FIRE_TIME * AllyFireMul() * hot * 1.7f;
                 } else {
                     AllyShoot(a);
-                    a->fireTimer = ALLY_FIRE_TIME * AllyFireMul() *
+                    a->fireTimer = ALLY_FIRE_TIME * AllyFireMul() * hot *
                                    (0.85f + (float)GetRandomValue(0, 40) / 100.0f);
                 }
             }
@@ -1279,13 +1597,19 @@ void AlliesDraw(void)
 
         if (a->spawnFade > 0.0f) continue;
 
-        /* --- recall marker: a bright ring while they are sprinting home --- */
-        if (a->rallyTimer > 0.0f) {
-            float pulse = 0.5f + 0.5f * sinf(g.time * 14.0f);
+        /* --- crate buffs, so you can see who is armed and who is armoured --- */
+        if (a->shieldTimer > 0.0f) {
+            float pulse = 0.5f + 0.5f * sinf(g.time * 9.0f);
             DrawCircleLines((int)floorf(a->pos.x), (int)floorf(a->pos.y),
-                            12.0f + pulse * 5.0f,
-                            (Color){ 126, 226, 250,
-                                     (unsigned char)(80.0f + 130.0f * pulse) });
+                            13.0f + pulse * 3.0f,
+                            (Color){ 126, 196, 250,
+                                     (unsigned char)(70.0f + 90.0f * pulse) });
+        }
+        if (a->powerTimer > 0.0f) {
+            /* hot guns: a warm glow on the nose, honestly earned */
+            float pulse = 0.5f + 0.5f * sinf(g.time * 16.0f);
+            DrawCircleV(a->pos, 3.0f + pulse * 2.0f,
+                        (Color){ 255, 196, 96, (unsigned char)(60.0f + 60.0f * pulse) });
         }
 
         /* --- distress beacon ------------------------------------------- */
@@ -1301,6 +1625,48 @@ void AlliesDraw(void)
 
             DrawRectangle((int)bx, (int)by, 3, 8, (Color){ 255, 74, 74, 255 });
             DrawRectangle((int)bx, (int)by + 10, 3, 3, (Color){ 255, 74, 74, 255 });
+        }
+    }
+}
+
+/* The recall beacon.
+ *
+ * The ring goes on the *player*, not on each wingman: it marks the spot the
+ * wing was ordered to, so "come here" is legible at a glance. Everyone still
+ * on their way home is tied to it with a dashed line in their own paint, and
+ * the moment they arrive the line is gone - they are on station and shooting. */
+void RallyDraw(void)
+{
+    if (g.rallyTimer <= 0.0f || !g.player.alive) return;
+
+    float pulse = 0.5f + 0.5f * sinf(g.time * 9.0f);
+
+    /* the ring itself, two passes so it reads over any terrain */
+    DrawCircleLines((int)floorf(g.player.pos.x), (int)floorf(g.player.pos.y),
+                    30.0f + pulse * 5.0f,
+                    (Color){ 126, 226, 250, (unsigned char)(120.0f + 120.0f * pulse) });
+    DrawCircleLines((int)floorf(g.player.pos.x), (int)floorf(g.player.pos.y),
+                    38.0f - pulse * 4.0f,
+                    (Color){ 126, 226, 250, 70 });
+
+    for (int i = 0; i < MAX_ALLIES; i++) {
+        Ally *a = &g.allies[i];
+        if (!a->alive || a->spawnFade > 0.0f || a->rallyTimer <= 0.0f) continue;
+
+        float d = V2Len(V2Sub(a->pos, g.player.pos));
+        if (d <= ALLY_RALLY_ARRIVE) continue;   /* already here, just fighting */
+
+        const AllyProfile *pr = AllyProfileOf(a->role);
+
+        /* dashed tether: the wingman is inbound */
+        Vector2 from = a->pos;
+        Vector2 to   = g.player.pos;
+        float   len  = d;
+        Vector2 dir  = V2Scale(V2Sub(to, from), 1.0f / fmaxf(len, 0.001f));
+
+        for (float t = 18.0f; t < len - 26.0f; t += 9.0f) {
+            Vector2 p = V2Add(from, V2Scale(dir, t));
+            DrawRectangle((int)floorf(p.x) - 1, (int)floorf(p.y) - 1, 2, 2, pr->hull);
         }
     }
 }
@@ -1396,6 +1762,8 @@ void BulletsUpdate(float dt)
                    player's bigger kills get a comment from the cheap seats. */
                 if (!e->alive) {
                     if (b->owner == BULLET_ALLY && b->slot >= 0) {
+                        /* ...and the whole wing learns something from it */
+                        if (b->slot < MAX_ALLIES) g.allyKills[b->slot]++;
                         if (GetRandomValue(0, 9) < 7) ChatSay(b->slot, CHAT_KILL);
                     } else if (wasHeavy) {
                         int alive[MAX_ALLIES], n = 0;
@@ -1499,15 +1867,32 @@ void PickupsUpdate(float dt)
         if (!playerHas && !allyHas) continue;
 
         if (allyHas) {
+            /* They grabbed it for a reason: it goes where the crate said it
+               would, not just into a repair. */
+            bool quiet = false;
             switch (p->kind) {
-                case PICK_HEALTH: allyHas->hp = fminf(allyHas->maxHp, allyHas->hp + 35.0f); break;
-                case PICK_POWER:  allyHas->hp = fminf(allyHas->maxHp, allyHas->hp + 10.0f); break;
-                case PICK_SHIELD: allyHas->hp = fminf(allyHas->maxHp, allyHas->hp + 14.0f); break;
+                case PICK_HEALTH:
+                    quiet = (allyHas->hp >= allyHas->maxHp - 0.5f);
+                    allyHas->hp = fminf(allyHas->maxHp, allyHas->hp + 35.0f);
+                    break;
+                case PICK_POWER:
+                    quiet = (allyHas->powerTimer > 0.0f);
+                    allyHas->powerTimer = fmaxf(allyHas->powerTimer, ALLY_POWER_TIME);
+                    allyHas->hp = fminf(allyHas->maxHp, allyHas->hp + 10.0f);
+                    break;
+                case PICK_SHIELD:
+                    quiet = (allyHas->shieldTimer > 0.0f);
+                    allyHas->shieldTimer = fmaxf(allyHas->shieldTimer, ALLY_SHIELD_TIME);
+                    allyHas->hp = fminf(allyHas->maxHp, allyHas->hp + 14.0f);
+                    break;
             }
             allyHas->hitFlash = 0.5f;
             p->alive = false;
             SpawnBurstParticles(p->pos, 0.4f, COL_SHALLOW);
             PlaySfx(assets.pickup, 0.22f, 1.35f);
+
+            /* ...and of course they tell everyone about it */
+            if (!quiet && GetRandomValue(0, 2) == 0) ChatSay(allyHas->slot, CHAT_LOOT);
             continue;
         }
 
@@ -1661,16 +2046,26 @@ void StartWave(int wave)
 
     /* The swarm grows a little faster than the wing does - a long run is
        meant to end badly eventually - but it is a steady ramp, not a cliff,
-       and it keeps growing for as long as the player can stay alive. */
-    int heavy  = (wave >= 3) ? (wave - 1) / 2 : 0;
-    int raider = (wave >= 2) ? wave          : 0;
-    int scout  = 4 + wave + wave / 2;
+       and it keeps growing for as long as the player can stay alive. New
+       kinds turn up as the run goes on, so the fight keeps changing shape. */
+    int heavy    = (wave >= 3) ? (wave - 1) / 2      : 0;
+    int raider   = (wave >= 2) ? wave                : 0;
+    int scout    = 4 + wave + wave / 2;
+    int dart     = (wave >= 2) ? 2 + wave / 2        : 0;
+    int lancer   = (wave >= 4) ? 1 + (wave - 4) / 3  : 0;
+    int splitter = (wave >= 5) ? 1 + (wave - 5) / 4  : 0;
+    int tender   = (wave >= 6) ? 1 + (wave - 6) / 5  : 0;
 
-    g.waveHeavy  = (heavy  > 14) ? 14 : heavy;
-    g.waveRaider = (raider > 26) ? 26 : raider;
-    g.waveScout  = (scout  > 36) ? 36 : scout;
+    g.waveHeavy    = (heavy    > 14) ? 14 : heavy;
+    g.waveRaider   = (raider   > 26) ? 26 : raider;
+    g.waveScout    = (scout    > 36) ? 36 : scout;
+    g.waveDart     = (dart     > 20) ? 20 : dart;
+    g.waveLancer   = (lancer   >  7) ?  7 : lancer;
+    g.waveSplitter = (splitter >  6) ?  6 : splitter;
+    g.waveTender   = (tender   >  3) ?  3 : tender;
 
-    g.wavePending = g.waveScout + g.waveRaider + g.waveHeavy;
+    g.wavePending = g.waveScout + g.waveRaider + g.waveHeavy +
+                    g.waveDart + g.waveLancer + g.waveSplitter + g.waveTender;
     g.spawnTimer  = 1.2f;
 
     /* Rearm the wing before the shooting starts. */
@@ -1704,11 +2099,19 @@ void StartWave(int wave)
         for (int i = 0; i < MAX_ALLIES; i++) if (g.allies[i].alive) alive[n++] = i;
         if (n == 0) return;
 
-        if (wave > 1 && (wave % 3) == 0) {
+        if (wave > 1 && (wave % 5) == 0) {
+            static const char *const kVet[ALLY_ROLE_COUNT] = {
+                "NEW ENGINES. TRY TO KEEP UP.",
+                "SQUADRON UPGRADE COMPLETE.",
+                "OOH! EVERYTHING'S SHINY!"
+            };
+            int who = alive[GetRandomValue(0, n - 1)];
+            ChatSayText(who, kVet[g.allies[who].role]);
+        } else if (wave > 1 && (wave % 3) == 0) {
             static const char *const kRearm[ALLY_ROLE_COUNT] = {
-                "NEW GUNS. NOW IT'S FAIR.",
-                "REARMED AND PATCHED. THANK YOU.",
-                "NEW PARTS! I FEEL FAST! MAYBE TOO FAST!"
+                "NEW GUNS. NOW IT'S FAIR, PUNKS.",
+                "REARMED. PATCHED. PISSED OFF.",
+                "NEW PARTS! I FEEL FAST! TOO FAST?!"
             };
             int who = alive[GetRandomValue(0, n - 1)];
             ChatSayText(who, kRearm[g.allies[who].role]);
@@ -1727,18 +2130,32 @@ void WaveSpawnStep(float dt)
 
     g.spawnTimer = fmaxf(0.14f, 0.70f - g.difficulty * 0.035f);
 
-    EnemyKind kind;
-    int roll = GetRandomValue(0, g.waveScout + g.waveRaider + g.waveHeavy - 1);
+    /* Whatever is left of the wave, weighted by what is left of each kind -
+       so the composition stays the one StartWave decided, in a random order. */
+    int remaining[ENEMY_KIND_COUNT] = {
+        g.waveScout, g.waveRaider, g.waveHeavy, g.waveDart,
+        g.waveLancer, g.waveSplitter, g.waveTender,
+    };
 
-    if (roll < g.waveScout) {
-        kind = ENEMY_SCOUT;
-        g.waveScout--;
-    } else if (roll < g.waveScout + g.waveRaider) {
-        kind = ENEMY_RAIDER;
-        g.waveRaider--;
-    } else {
-        kind = ENEMY_HEAVY;
-        g.waveHeavy--;
+    int total = 0;
+    for (int i = 0; i < ENEMY_KIND_COUNT; i++) total += remaining[i];
+    if (total <= 0) { g.wavePending = 0; return; }
+
+    int roll = GetRandomValue(0, total - 1);
+    EnemyKind kind = ENEMY_SCOUT;
+    for (int i = 0; i < ENEMY_KIND_COUNT; i++) {
+        if (roll < remaining[i]) { kind = (EnemyKind)i; break; }
+        roll -= remaining[i];
+    }
+
+    switch (kind) {
+        case ENEMY_RAIDER:   g.waveRaider--;   break;
+        case ENEMY_HEAVY:    g.waveHeavy--;    break;
+        case ENEMY_DART:     g.waveDart--;     break;
+        case ENEMY_LANCER:   g.waveLancer--;   break;
+        case ENEMY_SPLITTER: g.waveSplitter--; break;
+        case ENEMY_TENDER:   g.waveTender--;   break;
+        default:             g.waveScout--;    break;
     }
     g.wavePending--;
 

@@ -137,9 +137,14 @@ static void GatherInput(void)
     if (IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN))  move.y += 1.0f;
 
     bool    firing   = IsMouseButtonDown(MOUSE_BUTTON_LEFT) || IsKeyDown(KEY_SPACE);
+    bool    boosting = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
     bool    gamepad  = false;
     Vector2 aim      = V2(0, 0);
 
+    /* --- Xbox pad: left stick flies, right stick shoots, triggers fire -----
+       Left stick moves, right stick aims and opens up, RT/RB fire, LT/Y burn
+       the boost, LB (or the bottom of the D-pad) calls the wing home and
+       Start pauses. Everything the keyboard can do is on the pad too. */
     if (IsGamepadAvailable(0)) {
         Vector2 ls = V2(GetGamepadAxisMovement(0, GAMEPAD_AXIS_LEFT_X),
                         GetGamepadAxisMovement(0, GAMEPAD_AXIS_LEFT_Y));
@@ -158,6 +163,13 @@ static void GatherInput(void)
             firing  = true;
             gamepad = true;
         }
+
+        /* boost: left trigger, either as a digital button or as an axis */
+        if (IsGamepadButtonDown(0, GAMEPAD_BUTTON_LEFT_TRIGGER_2) ||
+            IsGamepadButtonDown(0, GAMEPAD_BUTTON_RIGHT_FACE_UP) ||
+            GetGamepadAxisMovement(0, GAMEPAD_AXIS_LEFT_TRIGGER) > 0.45f) {
+            boosting = true;
+        }
     }
 
     Vector2 mouseVirtual = ScreenToVirtual(GetMousePosition());
@@ -171,7 +183,7 @@ static void GatherInput(void)
     input.move         = move;
     input.aim          = aim;
     input.firing       = firing;
-    input.boost        = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
+    input.boost        = boosting;
     input.rally        = IsKeyPressed(KEY_Q) ||
                          IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_TRIGGER_1) ||
                          IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_FACE_DOWN);
@@ -300,7 +312,8 @@ static void StartNewRun(void)
 static void UpdatePlaying(float dt)
 {
     g.survived += dt;
-    if (g.rallyCool > 0.0f) g.rallyCool -= dt;
+    if (g.rallyCool  > 0.0f) g.rallyCool  -= dt;
+    if (g.rallyTimer > 0.0f) g.rallyTimer -= dt;
 
     /* hit-stop: freeze the simulation for a couple of frames on a big kill */
     float step = dt;
@@ -367,9 +380,21 @@ static void DrawWorld(void)
     EnemiesDraw();
     AlliesDraw();
     PlayerDraw();
+    RallyDraw();
     BurstsDraw();
     ParticlesDraw();
     PopupsDraw();
+}
+
+/* Attract camera: a slow drift over the ground the run will start on. The
+   endless arena means there is nothing to clamp against - it just flies. */
+static void UpdateTitleCamera(void)
+{
+    camera.offset   = V2(RENDER_W * 0.5f, RENDER_H * 0.5f);
+    camera.zoom     = 1.0f;
+    camera.rotation = 0.0f;
+    camera.target   = V2(floorf(g.player.pos.x + sinf(g.timer * 0.11f) * 150.0f),
+                         floorf(g.player.pos.y + cosf(g.timer * 0.15f) * 90.0f));
 }
 
 static void DrawFrame(void)
@@ -381,14 +406,26 @@ static void DrawFrame(void)
     BeginTextureMode(target);
     ClearBackground(COL_DEEP);
 
-    BeginMode2D(camera);
-    DrawWorld();
-    EndMode2D();
+    if (g.state == STATE_TITLE) {
+        /* Attract card: the land the run will start on drifts past behind the
+           title, so the first thing anyone sees is the game itself. */
+        UpdateTitleCamera();
 
-    switch (g.state) {
-        case STATE_PAUSED:   HudDrawPause();    break;
-        case STATE_GAMEOVER: HudDrawGameOver(); break;
-        default:             HudDraw(camera);   ChatDraw(); break;
+        BeginMode2D(camera);
+        ArenaDraw(camera);
+        EndMode2D();
+
+        HudDrawTitle();
+    } else {
+        BeginMode2D(camera);
+        DrawWorld();
+        EndMode2D();
+
+        switch (g.state) {
+            case STATE_PAUSED:   HudDrawPause();    break;
+            case STATE_GAMEOVER: HudDrawGameOver(); break;
+            default:             HudDraw(camera);   ChatDraw(); break;
+        }
     }
 
     EndTextureMode();
@@ -503,6 +540,18 @@ static void HandleGlobalKeys(void)
     if (IsKeyPressed(KEY_F12)) TakeScreenshot("pixel_squadron.png");
 
     switch (g.state) {
+        case STATE_TITLE:
+            /* Enter (or A on a pad) ships out. Escape backs out of the game
+               altogether, which is what a title screen is for. */
+            if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER) ||
+                IsKeyPressed(KEY_SPACE) ||
+                IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_FACE_DOWN) ||
+                IsGamepadButtonPressed(0, GAMEPAD_BUTTON_MIDDLE_RIGHT)) {
+                StartNewRun();
+            }
+            if (IsKeyPressed(KEY_ESCAPE)) wantQuit = true;
+            break;
+
         case STATE_PLAY:
             if (IsKeyPressed(KEY_P) || IsKeyPressed(KEY_ESCAPE) ||
                 IsGamepadButtonPressed(0, GAMEPAD_BUTTON_MIDDLE_RIGHT)) {
@@ -538,6 +587,8 @@ int main(int argc, char **argv)
     const char *shotPath = NULL;
     unsigned seed = 0;
     bool endCard = false;
+    bool titleCard = false;
+    int  forceBiome = -1;
 #if !defined(__EMSCRIPTEN__)
     int startFlags = START_CENTER | START_FULLSCREEN;   /* play big by default */
 #endif
@@ -556,12 +607,19 @@ int main(int argc, char **argv)
 #endif
         } else if (strcmp(argv[i], "--endcard") == 0) {
             endCard = true;      /* dev: screenshot the end-of-run report */
+        } else if (strcmp(argv[i], "--titlecard") == 0) {
+            titleCard = true;    /* dev: screenshot the title card */
+        } else if (strcmp(argv[i], "--biome") == 0 && i + 1 < argc) {
+            forceBiome = atoi(argv[++i]);   /* dev: pin the world to one biome */
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             printf("Pixel Squadron\n"
                    "  --seed N          start from a specific terrain seed\n"
                    "  --demo SECONDS    play itself, then screenshot and quit\n"
                    "  --shot FILE       where the demo writes its screenshot\n"
+                   "  --biome N         dev: force one biome (0 verdant, 1 dust,\n"
+                   "                                 2 frost, 3 ash, 4 verge)\n"
                    "  --endcard         dev: jump straight to the end-of-run report\n"
+                   "  --titlecard       dev: screenshot the title card and quit\n"
                    "  --windowed        start in a window (default is fullscreen)\n"
                    "  --fullscreen      force fullscreen\n"
                    "\n"
@@ -594,7 +652,7 @@ int main(int argc, char **argv)
     InitAudioDevice();
 
     /* A headless demo should not hijack the desktop. */
-    if (demoSeconds > 0.0f) startFlags &= ~START_FULLSCREEN;
+    if (demoSeconds > 0.0f || endCard) startFlags &= ~START_FULLSCREEN;
 
     FitWindowToIntegerScale(startFlags);
     if (startFlags & START_FULLSCREEN) SetFullscreen(true);
@@ -603,6 +661,7 @@ int main(int argc, char **argv)
     SetExitKey(KEY_NULL);          /* we handle Escape ourselves */
     SetTargetFPS(60);
     SetRandomSeed(seed ? seed : (unsigned)time(NULL));
+    ArenaForceBiome(forceBiome);   /* no-op unless --biome was passed */
 
     LoadHighScore();
     AssetsLoad();
@@ -617,9 +676,13 @@ int main(int argc, char **argv)
     SetVirtualScreen(BASE_W, BASE_H);
     cameraPos = camera.target;
 
-    /* Straight into the action: the game opens on a live run rather than a
-       title card, so the first thing anyone sees is the squadron flying. */
+    /* Generate the run the title card will sit over, so the attract view is
+       the actual map the first wave starts on. */
     StartNewRun();
+
+    /* Open on the title card - the land the run will start on drifts past
+       behind it - unless a dev flag wants to be in the fight immediately. */
+    if (demoSeconds <= 0.0f) g.state = STATE_TITLE;
 
     /* Dev aid: jump to the end-of-run report with a plausible run behind it,
        so the layout can be checked without playing for ten minutes first. */
@@ -635,6 +698,26 @@ int main(int argc, char **argv)
 
     if (demoSeconds > 0.0f) g.autoPilot = true;
 
+    /* Dev aid: sit on the title card, screenshot it and quit. */
+    if (titleCard) {
+        float shotAt = (demoSeconds > 0.0f) ? demoSeconds : 0.7f;
+
+        while (!WindowShouldClose() && g.timer < shotAt) {
+            float dt = fminf(GetFrameTime(), 0.05f);
+            g.timer += dt;
+            DrawFrame();
+        }
+
+        CaptureVirtualScreen(shotPath ? shotPath : "title.png");
+        TraceLog(LOG_INFO, "DEMO: captured title card");
+
+        UnloadRenderTexture(target);
+        AssetsUnload();
+        CloseAudioDevice();
+        CloseWindow();
+        return 0;
+    }
+
     while (!WindowShouldClose() && !wantQuit) {
         float dt = fminf(GetFrameTime(), 0.05f);
         g.timer += dt;
@@ -648,6 +731,19 @@ int main(int argc, char **argv)
         if (g.autoPilot && g.state == STATE_PLAY) AutoPilotInput(dt);
         else if (g.state == STATE_PLAY)           GatherInput();
         else                                      input = (InputState){ 0 };
+
+        /* The game draws its own crosshair on the aim point, so the OS arrow
+           would only be a second, differently-placed cursor on top of it. It
+           comes back the moment we are in a menu. */
+        {
+            static bool cursorHidden = false;
+            bool wantHidden = (g.state == STATE_PLAY || g.state == STATE_TITLE) &&
+                              !g.autoPilot;
+            if (wantHidden != cursorHidden) {
+                if (wantHidden) HideCursor(); else ShowCursor();
+                cursorHidden = wantHidden;
+            }
+        }
 
         if (g.state == STATE_PLAY) {
             UpdateGameCamera(dt);
@@ -671,6 +767,22 @@ int main(int argc, char **argv)
             CaptureVirtualScreen(shotPath ? shotPath : "pixel_squadron.png");
             TraceLog(LOG_INFO, "DEMO: captured after %.1fs (score %d, wave %d, kills %d, crits %d)",
                      g.autoPilotTime, g.score, g.wave, g.kills, g.crits);
+
+            /* Census of whatever is still in the air, so a run's composition
+               can be checked without squinting at a screenshot. */
+            int census[ENEMY_KIND_COUNT] = { 0 };
+            int allyShots = 0;
+            for (int i = 0; i < MAX_ENEMIES; i++)
+                if (g.enemies[i].alive) census[g.enemies[i].kind]++;
+            for (int i = 0; i < MAX_BULLETS; i++)
+                if (g.bullets[i].alive && g.bullets[i].owner == BULLET_ALLY) allyShots++;
+
+            TraceLog(LOG_INFO, "DEMO: enemies S%d R%d H%d dart%d lancer%d split%d tender%d"
+                               " | wing kills %d/%d/%d, ally shots %d, rally %.1f",
+                     census[ENEMY_SCOUT], census[ENEMY_RAIDER], census[ENEMY_HEAVY],
+                     census[ENEMY_DART], census[ENEMY_LANCER], census[ENEMY_SPLITTER],
+                     census[ENEMY_TENDER],
+                     g.allyKills[0], g.allyKills[1], g.allyKills[2], allyShots, g.rallyTimer);
             break;
         }
 

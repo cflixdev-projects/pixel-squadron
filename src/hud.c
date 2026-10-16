@@ -177,6 +177,12 @@ void HudDraw(Camera2D cam)
     DrawTextPixShadow(assets.font, waveLabel,
                       V2(floorf((RENDER_W - waveW) * 0.5f), 10), 1, COL_FOAM);
 
+    /* --- and which country we are over, just under it ------------------ */
+    const char *biome = ArenaBiomeNameAt(p->pos);
+    float biomeW = TextWidthPix(assets.font, biome, 1);
+    DrawTextPixShadow(assets.font, biome, V2(floorf((RENDER_W - biomeW) * 0.5f), 30), 1,
+                      (Color){ 168, 196, 204, 200 });
+
     /* --- boost + recall meters, bottom left --------------------------- */
     float y = RENDER_H - 30.0f;
 
@@ -286,10 +292,15 @@ void HudDraw(Camera2D cam)
 
     /* --- reticle, only when the mouse is doing the aiming ------------- */
     if (!input.usingGamepad && g.player.alive) {
-        Vector2 m = input.reticle;
-        DrawRectangleLines((int)m.x - 5, (int)m.y - 5, 10, 10,
-                           (Color){ 223, 246, 245, 120 });
-        DrawRectangle((int)m.x, (int)m.y, 1, 1, (Color){ 255, 130, 140, 200 });
+        /* The crosshair sits exactly on the point the guns are aimed at: the
+           shots fly down the ray from the nose through this pixel, so whatever
+           the middle of the box is over is what gets hit. The box is an odd
+           size on purpose, so its centre pixel *is* the aim point. */
+        int cx = (int)floorf(input.reticle.x);
+        int cy = (int)floorf(input.reticle.y);
+
+        DrawRectangleLines(cx - 6, cy - 6, 13, 13, (Color){ 223, 246, 245, 120 });
+        DrawRectangle(cx - 1, cy - 1, 3, 3, (Color){ 255, 130, 140, 210 });
     }
 
     /* --- damage vignette ---------------------------------------------- */
@@ -299,6 +310,83 @@ void HudDraw(Camera2D cam)
         DrawRectangle(0, RENDER_H - 6, RENDER_W, 6, (Color){ 222, 75, 30, a });
         DrawRectangle(0, 0, 6, RENDER_H,  (Color){ 222, 75, 30, a });
         DrawRectangle(RENDER_W - 6, 0, 6, RENDER_H, (Color){ 222, 75, 30, a });
+    }
+}
+
+/* --------------------------------------------------------------------------
+ *  Title / attract card
+ *
+ *  Sits over the live arena pan, so the first thing anyone sees is the game
+ *  itself. The whole block is measured from the middle of the screen at a
+ *  fixed pitch, which keeps it centred on any window shape.
+ * ----------------------------------------------------------------------- */
+void HudDrawTitle(void)
+{
+    DrawRectangle(0, 0, RENDER_W, RENDER_H, (Color){ 12, 20, 28, 130 });
+
+    const float block = 184.0f;                       /* total layout height */
+    float top = floorf((RENDER_H - block) * 0.5f);
+    if (top < 6.0f) top = 6.0f;
+
+    /* subtle banner behind the title */
+    DrawRectangle(0, (int)top - 8, RENDER_W, 56, (Color){ 12, 20, 28, 175 });
+    DrawRectangle(0, (int)top - 8, RENDER_W, 1, (Color){ 126, 226, 250, 90 });
+    DrawRectangle(0, (int)top + 47, RENDER_W, 1, (Color){ 126, 226, 250, 90 });
+
+    DrawTextCentered("PIXEL SQUADRON", (int)top, 2, assets.font, COL_FOAM);
+    DrawTextCentered("T W I N - S T I C K   A R E N A", (int)top + 30, 1,
+                     assets.font, COL_SHALLOW);
+
+    /* the squadron flies past, each in their own colours */
+    for (int i = 0; i < MAX_ALLIES; i++) {
+        const AllyProfile *pr = AllyProfileOf(i);
+        float t = fmodf(g.timer * (26.0f + (float)i * 9.0f) + (float)i * 60.0f,
+                        RENDER_W + 120.0f) - 60.0f;
+
+        DrawShip(pr->ship, V2(t, top + 62.0f + (float)i * 15.0f),
+                 ART_FORWARD + 4.0f, 0.5f, pr->hull);
+    }
+
+    /* who is riding with you, in their own colours */
+    float w[ALLY_ROLE_COUNT];
+    float total = 0.0f;
+    for (int i = 0; i < ALLY_ROLE_COUNT; i++) {
+        const AllyProfile *pr = AllyProfileOf(i);
+        w[i] = TextWidthPix(assets.font, pr->name, 1);
+        total += w[i] + 10.0f;
+    }
+    total -= 10.0f;
+
+    float x = floorf((RENDER_W - total) * 0.5f);
+    for (int i = 0; i < ALLY_ROLE_COUNT; i++) {
+        const AllyProfile *pr = AllyProfileOf(i);
+        DrawTextPix(assets.font, pr->name, V2(x, top + 112.0f), 1, pr->text);
+        x += w[i];
+        if (i < ALLY_ROLE_COUNT - 1) {
+            DrawTextPix(assets.font, "-", V2(x + 4.0f, top + 112.0f), 1,
+                        (Color){ 126, 226, 250, 140 });
+            x += 14.0f;
+        }
+    }
+
+    /* blink on a slow cycle rather than a hard flicker */
+    float blink = 0.55f + 0.45f * sinf(g.timer * 4.0f);
+    Color prompt = COL_FOAM;
+    prompt.a = (unsigned char)(120.0f + 135.0f * blink);
+    DrawTextCentered("PRESS ENTER OR [A] TO FLY", (int)top + 132, 1,
+                     assets.font, prompt);
+
+    DrawTextCentered("WASD / LEFT STICK  -  MOVE", (int)top + 150, 1, assets.font,
+                     (Color){ 126, 226, 250, 190 });
+    DrawTextCentered("MOUSE / RIGHT STICK  -  AIM", (int)top + 162, 1, assets.font,
+                     (Color){ 126, 226, 250, 190 });
+    DrawTextCentered("LMB / RT - FIRE   SHIFT / LT - BOOST   Q / LB - RALLY",
+                     (int)top + 174, 1, assets.font, (Color){ 126, 226, 250, 190 });
+
+    if (g.highScore > 0) {
+        char best[48];
+        snprintf(best, sizeof best, "BEST  %07d", g.highScore);
+        DrawTextCentered(best, 10, 1, assets.font, (Color){ 255, 200, 80, 220 });
     }
 }
 
@@ -360,7 +448,7 @@ void HudDrawGameOver(void)
     float blink = 0.55f + 0.45f * sinf(g.timer * 4.0f);
     Color prompt = COL_FOAM;
     prompt.a = (unsigned char)(120.0f + 135.0f * blink);
-    DrawTextCentered("PRESS ENTER TO FLY AGAIN", (int)below, 1, assets.font, prompt);
+    DrawTextCentered("PRESS ENTER OR [A] TO FLY AGAIN", (int)below, 1, assets.font, prompt);
     DrawTextCentered("ESC  -  QUIT", (int)below + 15.0f, 1, assets.font,
                      (Color){ 126, 226, 250, 160 });
 }
@@ -375,9 +463,9 @@ void HudDrawPause(void)
     int centre = (int)floorf(RENDER_H * 0.5f);
 
     DrawTextCentered("PAUSED", centre - 22, 2, assets.font, COL_FOAM);
-    DrawTextCentered("P / ESC  -  RESUME", centre + 12, 1, assets.font, COL_SHALLOW);
-    DrawTextCentered("WASD - MOVE    MOUSE - AIM    LMB - FIRE", centre + 28, 1,
-                     assets.font, (Color){ 126, 226, 250, 160 });
-    DrawTextCentered("SHIFT - BOOST    Q - RALLY THE WING    F11 - FULLSCREEN",
+    DrawTextCentered("P / ESC / START  -  RESUME", centre + 12, 1, assets.font, COL_SHALLOW);
+    DrawTextCentered("WASD / LEFT STICK - MOVE    MOUSE / RIGHT STICK - AIM",
+                     centre + 28, 1, assets.font, (Color){ 126, 226, 250, 160 });
+    DrawTextCentered("LMB / RT - FIRE    SHIFT / LT - BOOST    Q / LB - RALLY",
                      centre + 42, 1, assets.font, (Color){ 126, 226, 250, 160 });
 }
