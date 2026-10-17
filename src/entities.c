@@ -453,6 +453,7 @@ void EntitiesReset(void)
             .specialFlash = 0.0f,
             .slot         = i,
             .role         = i % ALLY_ROLE_COUNT,   /* extras reuse the roster */
+            .guardTimer   = 0.0f,
         };
     }
 }
@@ -1151,6 +1152,24 @@ void PlayerDraw(void)
 /* --------------------------------------------------------------------------
  *  Enemies
  * ----------------------------------------------------------------------- */
+/* Kills feed the special bag: every knockdown yanks the whole squadron's
+   cooldowns down, so a hot streak keeps everyone's ultimate coming back
+   faster. Wingmen climb their meter a shade slower - the player's big move
+   is still the showpiece. */
+#define SPECIAL_KILL_REFUND  0.9f    /* seconds off every special per kill  */
+#define SPECIAL_ELITE_REFUND 1.8f    /* elites feed the bag twice over      */
+
+static void SpecialsKillRefund(float secs)
+{
+    g.player.specialTimer = fmaxf(0.0f, g.player.specialTimer - secs);
+
+    for (int i = 0; i < MAX_ALLIES; i++) {
+        Ally *a = &g.allies[i];
+        if (!a->alive) continue;
+        a->specialTimer = fmaxf(0.0f, a->specialTimer - secs * 0.8f);
+    }
+}
+
 void DamageEnemy(Enemy *e, float amount)
 {
     e->hp      -= amount;
@@ -1161,6 +1180,7 @@ void DamageEnemy(Enemy *e, float amount)
     e->alive = false;
     g.score += e->score;
     g.kills++;
+    SpecialsKillRefund(e->elite ? SPECIAL_ELITE_REFUND : SPECIAL_KILL_REFUND);
 
     bool big = (e->kind == ENEMY_HEAVY || e->kind == ENEMY_SPLITTER || e->elite);
     SpawnBurst(e->pos, big ? 1.6f : 1.0f);
@@ -1735,11 +1755,38 @@ static float AllyVet(void)
     return fminf(1.0f + kills + waves, ALLY_VET_CAP);
 }
 
+/* Past wave fifteen the swarm arrives in a different order of strength, and
+   the old growth curve stops keeping pace. From there each wave adds another
+   flat push on the whole wing - hull, guns, reload and reservations all ride
+   it - so a deep run stays winnable instead of melting the wing by twenty. */
+#define ALLY_LATE_WAVE  15
+#define ALLY_LATE_STEP  0.045f   /* +4.5% per wave past fifteen  */
+#define ALLY_LATE_CAP   1.60f    /* ...up to +60% on top          */
+
+static float AllyLatePush(void)
+{
+    float late = (float)(g.wave - ALLY_LATE_WAVE);
+    if (late <= 0.0f) return 1.0f;
+    return fminf(1.0f + late * ALLY_LATE_STEP, ALLY_LATE_CAP);
+}
+
 static float AllyRank(void)       { return (float)(g.wave > 0 ? g.wave - 1 : 0); }
-static float AllyMaxHpForRank(void){ return (ALLY_MAX_HP + AllyRank() * ALLY_RANK_HP) * AllyVet(); }
-static float AllyDamageMul(void)  { return (1.0f + AllyRank() * ALLY_RANK_DMG) * AllyVet(); }
-static float AllyFireMul(void)    { return fmaxf(0.38f, (1.0f - AllyRank() * ALLY_RANK_FIRE) / AllyVet()); }
-static float AllyCoolMul(void)    { return fmaxf(0.38f, (1.0f - AllyRank() * ALLY_RANK_COOL) / AllyVet()); }
+static float AllyMaxHpForRank(void)
+{
+    return (ALLY_MAX_HP + AllyRank() * ALLY_RANK_HP) * AllyVet() * AllyLatePush();
+}
+static float AllyDamageMul(void)
+{
+    return (1.0f + AllyRank() * ALLY_RANK_DMG) * AllyVet() * AllyLatePush();
+}
+static float AllyFireMul(void)
+{
+    return fmaxf(0.38f, (1.0f - AllyRank() * ALLY_RANK_FIRE) / AllyVet() / AllyLatePush());
+}
+static float AllyCoolMul(void)
+{
+    return fmaxf(0.38f, (1.0f - AllyRank() * ALLY_RANK_COOL) / AllyVet() / AllyLatePush());
+}
 static float AllySpeedMul(void)   { return fminf(AllyVet(), ALLY_SPEED_CAP); }
 
 /* Bring one wingman's hull up to what the wing has earned. Called every frame,
@@ -1939,6 +1986,7 @@ void AlliesUpdate(float dt)
                 a->rallyTimer   = 0.0f;
                 a->powerTimer   = 0.0f;
                 a->shieldTimer  = 0.0f;
+                a->guardTimer   = 0.0f;
                 SpawnBurst(a->pos, 0.7f);
 
                 static const char *const kBack[ALLY_ROLE_COUNT][3] = {
@@ -1970,6 +2018,21 @@ void AlliesUpdate(float dt)
             bool safe = (a->hp > a->maxHp * 0.5f) &&
                         (EnemiesNear(a->pos, ALLY_SWARM_RADIUS) == 0);
             if (safe && a->distress > 0.5f) a->distress = 0.5f;
+        }
+
+        /* --- how dangerous is the sky right here, right now ------------ */
+        bool swarmed = EnemiesNear(a->pos, ALLY_SWARM_RADIUS) >= ALLY_SWARM_COUNT;
+        bool fragile = (a->hp < a->maxHp * 0.45f);
+
+        /* The wing flies with a panic shield: the first time the sky turns
+           hostile (or the hull gets paper-thin) in each cooldown window,
+           plating snaps over them. It buys the bad minute, not invulne-
+           rability - and it re-arms itself slowly. */
+        if (a->guardTimer > 0.0f) a->guardTimer -= dt;
+        if ((swarmed || a->hp < a->maxHp * 0.30f) && a->guardTimer <= 0.0f &&
+            a->shieldTimer <= 0.0f && a->spawnFade <= 0.0f) {
+            a->shieldTimer = 4.0f;
+            a->guardTimer  = 16.0f;
         }
 
         /* --- pick something to shoot at -------------------------------- */
@@ -2095,8 +2158,11 @@ void AlliesUpdate(float dt)
             float   dLead    = V2Len(toLead);
             Vector2 dirLead  = (dLead > 0.001f) ? V2Scale(toLead, 1.0f / dLead) : dir;
 
-            /* close in when far away, back off when we are in its face */
+            /* close in when far away, back off when we are in its face -
+               and a hurt or swarmed pilot fights like a kite: same guns,
+               ninety pixels further out, so the swarm has farther to reach */
             float stand  = target->radius + ALLY_STANDOFF + (float)i * 12.0f;
+            if (!rallying && (swarmed || fragile)) stand += 90.0f;
             float radial = Clamp((d - stand) * 2.4f, -maxSpeed, maxSpeed);
 
             /* a slow strafe keeps the three of them from forming a queue */
@@ -2104,6 +2170,13 @@ void AlliesUpdate(float dt)
             float   strafe = sinf(g.time * 1.25f + (float)i * 2.1f) * maxSpeed * 0.38f;
 
             desiredVel = V2Add(V2Scale(dirLead, radial), V2Scale(side, strafe));
+
+            /* ...and they fall back firing, so a pack closes on moving
+               targets instead of a stationary Kill-Me sign. */
+            if (!rallying && (swarmed || fragile)) {
+                Vector2 away = V2Norm(V2Sub(a->pos, target->pos));
+                desiredVel = V2Add(desiredVel, V2Scale(away, maxSpeed * 0.6f));
+            }
 
             /* Leash: however good the target looks, never chase so far that we
                lose the player. Without this the whole wing ends up lured away
@@ -2972,6 +3045,7 @@ void DevSpawnWingmen(int n)
             a->hp        = a->maxHp;
             a->fireTimer    = 0.6f;
             a->specialTimer = 2.0f;
+            a->guardTimer   = 0.0f;
             a->spawnFade    = 0.0f;
             a->rallyTimer   = 0.0f;
         } else if (i >= n) {

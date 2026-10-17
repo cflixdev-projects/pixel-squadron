@@ -337,6 +337,7 @@ typedef struct {
     float   rallyTimer;    /* >0 while answering the player's recall */
     float   powerTimer;    /* >0 while their guns are hot from a crate */
     float   shieldTimer;   /* >0 while a shield crate is holding      */
+    float   guardTimer;    /* quiet period between panic shields       */
     float   quadTimer;     /* >0 while they are carrying the other crates */
     float   spreadTimer;
     float   homingTimer;
@@ -460,6 +461,9 @@ typedef enum {
     BIND_BOOST,      /* burn for speed  */
     BIND_RECALL,     /* bring the wing  */
     BIND_SPECIAL,    /* ultimate        */
+    BIND_AUTOSHOOT,  /* toggle auto-shoot  */
+    BIND_POPUPS,     /* chat speech bubbles on/off  */
+    BIND_LOG,        /* radio log on/off  */
     BIND_COUNT
 } BindAction;
 
@@ -650,10 +654,10 @@ void DevConsoleFeed(void);             /* while it is open: key handling */
 void DevSpawnWingmen(int n);           /* open n seats, 0..MAX_ALLIES    */
 void DevRunScriptedTest(void);         /* --devtest cheat verification   */
 
-/* pause-menu settings screen */
-extern int gfxPanelMode;   /* 0 hidden, 1 open */
+/* pause-menu settings screen */extern int gfxPanelMode;   /* 0 hidden, 1 open */
 extern int gfxPanelSel;    /* row under the caret */
-extern int pauseMenuSel;   /* pause main menu: 0 resume, 1 graphics, 2 controls */
+extern int pauseMenuSel;   /* pause main menu: 0 resume, 1 graphics, 2 controls,
+                              3 quit */
 
 extern Assets assets;
 

@@ -764,7 +764,7 @@ void HudDrawGraphics(int centre)
     float blink = 0.55f + 0.45f * sinf(g.timer * 4.0f);
     Color prompt = COL_FOAM;
     prompt.a = (unsigned char)(120.0f + 135.0f * blink);
-    DrawTextCentered("A/D CHANGE    W/S SELECT    G / ESC BACK",
+    DrawTextCentered("A/D CHANGE    W/S SELECT    G / ESC / B BACK",
                      RENDER_H - 14, 1, assets.font, prompt);
 }
 
@@ -779,15 +779,15 @@ void HudDrawPause(void)
     if (RemapActive()) {
         /* --- the pad controls panel ----------------------------------- */
         static const char *const kLabel[BIND_COUNT] = {
-            "FIRE", "BOOST", "RECALL", "SPECIAL"
+            "FIRE", "BOOST", "RECALL", "SPECIAL", "AUTO-SHOOT", "POPUPS", "LOG"
         };
 
-        DrawTextCentered("PAD CONTROLS", centre - 76, 2, assets.font, COL_FOAM);
+        DrawTextCentered("PAD CONTROLS", centre - 84, 2, assets.font, COL_FOAM);
         DrawTextCentered("LEFT STICK MOVE    RIGHT STICK AIM + SHOOT",
-                         centre - 52, 1, assets.font, (Color){ 126, 226, 250, 170 });
+                         centre - 62, 1, assets.font, (Color){ 126, 226, 250, 170 });
 
         float x = floorf((float)RENDER_W * 0.5f) - 70.0f;
-        float y = (float)centre - 30.0f;
+        float y = (float)centre - 44.0f;
 
         for (int i = 0; i < BIND_COUNT; i++) {
             bool sel = (i == RemapSelection());
@@ -802,7 +802,7 @@ void HudDrawPause(void)
             DrawTextPix(assets.font, line, V2(x, y), 1,
                         sel ? (Color){ 255, 236, 159, 255 } : COL_SHALLOW);
 
-            y += 16.0f;
+            y += 15.0f;
         }
 
         float blink = 0.55f + 0.45f * sinf(g.timer * 4.0f);
@@ -810,25 +810,25 @@ void HudDrawPause(void)
         prompt.a = (unsigned char)(120.0f + 135.0f * blink);
 
         if (RemapArmed()) {
-            DrawTextCentered("PRESS A PAD BUTTON  -  ESC TO CANCEL",
-                             centre + 44, 1, assets.font, prompt);
+            DrawTextCentered("PRESS A PAD BUTTON  -  B / ESC TO CANCEL",
+                             centre + 66, 1, assets.font, prompt);
         } else {
-            DrawTextCentered("W / S  -  CHOOSE    ENTER  -  REBIND",
-                             centre + 44, 1, assets.font, prompt);
-            DrawTextCentered("R  -  DEFAULTS      C / ESC / START  -  DONE",
-                             centre + 58, 1, assets.font, (Color){ 126, 226, 250, 160 });
+            DrawTextCentered("W / S CHOOSE    ENTER REBIND    B / ESC DONE",
+                             centre + 66, 1, assets.font, prompt);
+            DrawTextCentered("R DEFAULTS      START RESUMES FROM ANYWHERE",
+                             centre + 79, 1, assets.font, (Color){ 126, 226, 250, 160 });
         }
         return;
     }
 
     if (gfxPanelMode) { HudDrawGraphics(centre); return; }
 
-    DrawTextCentered("PAUSED", centre - 52, 2, assets.font, COL_FOAM);
+    DrawTextCentered("PAUSED", centre - 56, 2, assets.font, COL_FOAM);
 
-    static const char *const kMenu[] = { "RESUME", "GRAPHICS", "CONTROLS" };
+    static const char *const kMenu[] = { "RESUME", "GRAPHICS", "CONTROLS", "QUIT" };
     float x = floorf((float)RENDER_W * 0.5f) - 60.0f;
-    float y = (float)centre - 16.0f;
-    for (int i = 0; i < 3; i++) {
+    float y = (float)centre - 20.0f;
+    for (int i = 0; i < 4; i++) {
         bool sel = (i == pauseMenuSel);
         if (sel) {
             DrawRectangle((int)x - 12, (int)y - 3, 144, 15,
@@ -844,6 +844,6 @@ void HudDrawPause(void)
     float blink = 0.55f + 0.45f * sinf(g.timer * 4.0f);
     Color prompt = COL_SHALLOW;
     prompt.a = (unsigned char)(110.0f + 120.0f * blink);
-    DrawTextCentered("W/S + ENTER SELECT      V AUTO-SHOOT  H CHAT  L LOG  F FPS CAP",
-                     centre + 66, 1, assets.font, prompt);
+    DrawTextCentered("W/S + ENTER SELECT    START RESUMES    B BACKS ONE STEP",
+                     centre + 70, 1, assets.font, prompt);
 }

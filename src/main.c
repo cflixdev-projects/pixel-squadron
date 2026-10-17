@@ -211,18 +211,22 @@ Bindings binds;
 #define PAD_BUTTON_MAX   (GAMEPAD_BUTTON_RIGHT_THUMB + 1)
 
 static const char *const kBindKeys[BIND_COUNT] = {
-    "fire", "boost", "recall", "special"
+    "fire", "boost", "recall", "special", "autoshoot", "popups", "log"
 };
 
 void BindsLoadDefaults(void)
 {
-    /* The trigger shoots, B boosts, X calls the wing and Y is the ultimate.
-       Nothing else on the pad fires: a stray face button should never start
-       a fight. */
-    binds.button[BIND_FIRE]    = GAMEPAD_BUTTON_RIGHT_TRIGGER_2;  /* RT    */
-    binds.button[BIND_BOOST]   = GAMEPAD_BUTTON_RIGHT_FACE_RIGHT; /* B     */
-    binds.button[BIND_RECALL]  = GAMEPAD_BUTTON_RIGHT_FACE_LEFT;  /* X     */
-    binds.button[BIND_SPECIAL] = GAMEPAD_BUTTON_RIGHT_FACE_UP;    /* Y     */
+    /* The trigger shoots, B boosts, X calls the wing, Y is the ultimate,
+       A toggles auto-shoot, BACK mutes the speech bubbles and RB flips the
+       radio log. B also walks menus back and START opens them - those two
+       are reserved so a remapped pad can never lock the player out. */
+    binds.button[BIND_FIRE]      = GAMEPAD_BUTTON_RIGHT_TRIGGER_2;  /* RT    */
+    binds.button[BIND_BOOST]     = GAMEPAD_BUTTON_RIGHT_FACE_RIGHT; /* B     */
+    binds.button[BIND_RECALL]    = GAMEPAD_BUTTON_RIGHT_FACE_LEFT;  /* X     */
+    binds.button[BIND_SPECIAL]   = GAMEPAD_BUTTON_RIGHT_FACE_UP;    /* Y     */
+    binds.button[BIND_AUTOSHOOT] = GAMEPAD_BUTTON_RIGHT_FACE_DOWN;  /* A     */
+    binds.button[BIND_POPUPS]    = GAMEPAD_BUTTON_MIDDLE_LEFT;      /* BACK  */
+    binds.button[BIND_LOG]       = GAMEPAD_BUTTON_RIGHT_TRIGGER_1;  /* RB    */
 }
 
 /* A human name for a pad button, for the controls panel. */
@@ -325,18 +329,30 @@ bool RemapActive(void)    { return remapActive; }
 int  RemapSelection(void) { return remapSel; }
 bool RemapArmed(void)     { return remapArmed; }
 
-/* Which buttons may be bound. Start is the pause button and the guide button
-   belongs to the console, so neither is offered. */
+/* Which buttons may be bound. START is the pause button, the guide button
+   belongs to the console, and B belongs to the menus as "one step back" -
+   none of the three are offered, so a pad can never lock itself out. */
 static bool BindableButton(int b)
 {
     return b >= PAD_BUTTON_FIRST && b < PAD_BUTTON_MAX &&
-           b != GAMEPAD_BUTTON_MIDDLE_RIGHT && b != GAMEPAD_BUTTON_MIDDLE;
+           b != GAMEPAD_BUTTON_MIDDLE_RIGHT && b != GAMEPAD_BUTTON_MIDDLE &&
+           b != GAMEPAD_BUTTON_RIGHT_FACE_RIGHT;
 }
 
 /* Returns true while the panel is up, so the caller knows the pause key was
    spent on it rather than on resuming. */
 static bool RemapPanelKeys(void)
 {
+    /* START is the universal "out": wherever the pad has wandered in the
+       menus, one press lands straight back in the fight. */
+    if (IsGamepadButtonPressed(0, GAMEPAD_BUTTON_MIDDLE_RIGHT)) {
+        remapArmed  = false;
+        remapActive = false;
+        BindsSave();
+        g.state = STATE_PLAY;
+        return true;
+    }
+
     if (remapArmed) {
         for (int b = PAD_BUTTON_FIRST; b < PAD_BUTTON_MAX; b++) {
             if (!BindableButton(b)) continue;
@@ -348,6 +364,7 @@ static bool RemapPanelKeys(void)
             }
         }
         if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_C) ||
+            IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT) ||
             IsGamepadButtonPressed(0, GAMEPAD_BUTTON_MIDDLE_RIGHT)) {
             remapArmed = false;
         }
@@ -371,6 +388,7 @@ static bool RemapPanelKeys(void)
         BindsSave();
     }
     if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_C) ||
+        IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT) ||
         IsGamepadButtonPressed(0, GAMEPAD_BUTTON_MIDDLE_RIGHT)) {
         remapActive = false;
         BindsSave();
@@ -548,13 +566,13 @@ static void GatherInput(void)
     static bool chatPopups = true;
     static bool chatLog    = true;
     if (IsKeyPressed(KEY_V) ||
-        IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_FACE_DOWN)) {
+        IsGamepadButtonPressed(0, binds.button[BIND_AUTOSHOOT])) {
         autoShoot  = !autoShoot;
         if (autoShoot) { TextCopy(g.message, "AUTO-SHOOT ON");  g.messageTimer = 1.2f; }
         else           { TextCopy(g.message, "AUTO-SHOOT OFF"); g.messageTimer = 1.2f; }
     }
     if (IsKeyPressed(KEY_H) ||
-        IsGamepadButtonPressed(0, GAMEPAD_BUTTON_MIDDLE_LEFT)) {
+        IsGamepadButtonPressed(0, binds.button[BIND_POPUPS])) {
         chatPopups = !chatPopups;
         TextCopy(g.message, chatPopups ? "CHAT POPUPS ON" : "CHAT POPUPS OFF");
         g.messageTimer = 1.2f;
@@ -566,10 +584,12 @@ static void GatherInput(void)
         TextCopy(g.message, g_slowMo ? "SLOW-MO ON" : "SLOW-MO OFF");
         g.messageTimer = 1.2f;
     }
-    /* and the radio log on the right gets its own switch (L / menu button),
-       so the whole squadron can be silenced without turning off either. */
+    /* and the radio log on the right gets its own switch (L / RB), so the
+       whole squadron can be silenced without turning off either. START is
+       reserved for the pause menu - it used to do both, which made the
+       pause flicker the log every time. */
     if (IsKeyPressed(KEY_L) ||
-        IsGamepadButtonPressed(0, GAMEPAD_BUTTON_MIDDLE_RIGHT)) {
+        IsGamepadButtonPressed(0, binds.button[BIND_LOG])) {
         chatLog = !chatLog;
         TextCopy(g.message, chatLog ? "CHAT LOG ON" : "CHAT LOG OFF");
         g.messageTimer = 1.2f;
@@ -1452,8 +1472,15 @@ static void HandleGlobalKeys(void)
             /* ...and so does the graphics panel. */
             if (gfxPanelMode) {
                 enum { GFX_ROWS = 10 };
-                if (IsKeyPressed(KEY_G) || IsKeyPressed(KEY_ESCAPE)) {
+                if (IsKeyPressed(KEY_G) || IsKeyPressed(KEY_ESCAPE) ||
+                    IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT)) {
                     gfxPanelMode = 0;
+                    break;
+                }
+                /* START does not walk back a step, it leaves outright. */
+                if (IsGamepadButtonPressed(0, GAMEPAD_BUTTON_MIDDLE_RIGHT)) {
+                    gfxPanelMode = 0;
+                    g.state = STATE_PLAY;
                     break;
                 }
                 if (IsKeyPressed(KEY_W) || IsKeyPressed(KEY_UP) ||
@@ -1511,13 +1538,13 @@ static void HandleGlobalKeys(void)
                 break;
             }
 
-            /* pause main menu: three entries, gamepad friendly */
+            /* pause main menu: four entries, gamepad friendly */
             if (IsKeyPressed(KEY_W) || IsKeyPressed(KEY_UP) ||
                 IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_FACE_UP))
-                pauseMenuSel = (pauseMenuSel + 2) % 3;
+                pauseMenuSel = (pauseMenuSel + 3) % 4;
             if (IsKeyPressed(KEY_S) || IsKeyPressed(KEY_DOWN) ||
                 IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_FACE_DOWN))
-                pauseMenuSel = (pauseMenuSel + 1) % 3;
+                pauseMenuSel = (pauseMenuSel + 1) % 4;
 
             if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE) ||
                 IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_FACE_DOWN)) {
@@ -1525,10 +1552,26 @@ static void HandleGlobalKeys(void)
                     case 0: g.state = STATE_PLAY; break;
                     case 1: gfxPanelMode = 1; gfxPanelSel = 0; break;
                     case 2: remapActive = true; remapArmed = false; break;
+                    case 3:
+                        /* pads have no Alt+F4 - a player stuck at fullscreen
+                           with nothing in hand needs a way out of the run */
+#if defined(__EMSCRIPTEN__)
+                        EntitiesReset();
+                        g.state = STATE_TITLE;
+#else
+                        wantQuit = true;
+#endif
+                        break;
                 }
                 break;
             }
 
+            /* B is the pad's "one step back": the pause menu's only backwards
+               move is back into the fight. */
+            if (IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT)) {
+                g.state = STATE_PLAY;
+                break;
+            }
 
             /* Escape: if we are still in fullscreen, the first press already
                paused; the second one drops out of fullscreen instead of
