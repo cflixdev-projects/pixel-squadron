@@ -635,8 +635,10 @@ typedef struct {
     int motionBlur; /* fading trails behind fast things       */
     int vsync;      /* swap-block each monitor frame (desktop) */
     int msaa;       /* GPU anti-aliasing; applied next launch */
-    int display;    /* 0 windowed, 1 borderless-fullscreen (desktop) */
+    int display;    /* 0 windowed, 1 borderless, 2 exclusive-full (desktop) */
+    int winSize;    /* 0 auto fit, 1 1280x720, 2 1600x900, 3 1920x1080     */
     int shake;      /* screen shake on explosions/hits */
+    int volume;     /* master gain, 0..10 steps */
 } Graphics;
 extern Graphics gfx;
 

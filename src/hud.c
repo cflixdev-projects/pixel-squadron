@@ -710,18 +710,20 @@ void HudDrawGraphics(int centre)
         { "MOTION BLUR",{ "OFF", "ON", NULL, NULL } },
         { "VSYNC",      { "OFF", "ON", NULL, NULL } },
         { "AA (MSAA)",  { "OFF", "ON", NULL, NULL } },
-        { "DISPLAY",    { "WINDOWED", "FULLSCREEN", NULL, NULL } },
+        { "DISPLAY",    { "WINDOWED", "BORDERLESS", "FULLSCREEN", NULL } },
+        { "WINDOW SIZE", { "AUTO", "1280x720", "1600x900", "1920x1080" } },
         { "SCREEN SHAKE", { "OFF", "ON", NULL, NULL } },
+        { "VOLUME",     { NULL, NULL, NULL, NULL } },   /* value drawn as % */
     };
     const int kRowsCount = (int)(sizeof kRows / sizeof kRows[0]);
     const int kTotal = kRowsCount + 1;   /* + fps cap */
 
     float x = floorf((float)RENDER_W * 0.5f) - 96.0f;
-    float rowY = (float)centre - 62.0f;
+    float rowY = (float)centre - 70.0f;
 
     char line[64];
 
-    DrawTextCentered("GRAPHICS", centre - 92, 2, assets.font, COL_FOAM);
+    DrawTextCentered("GRAPHICS", centre - 84, 2, assets.font, COL_FOAM);
 
     for (int i = 0; i < kTotal; i++) {
         bool sel = (i == gfxPanelSel);
@@ -746,12 +748,19 @@ void HudDrawGraphics(int centre)
                 case 7: value = kWebNA;                             break;
                 case 8: value = kWebNA;                             break;
                 case 9: value = kWebNA;                             break;
+                case 10: value = kWebNA;                            break;
 #else
                 case 7: value = kRows[7].options[gfx.vsync];        break;
                 case 8: value = kRows[8].options[gfx.msaa];         break;
                 case 9: value = kRows[9].options[gfx.display];      break;
+                case 10: value = kRows[10].options[gfx.winSize];    break;
 #endif
-                case 10: value = kRows[10].options[gfx.shake];      break;
+                case 11: value = kRows[11].options[gfx.shake];      break;
+                case 12: {
+                    snprintf(capText, sizeof capText, "%d%%", gfx.volume * 10);
+                    value = capText;
+                    break;
+                }
                 default: value = ""; break;
             }
         } else if (fpsCap > 0) {
@@ -773,7 +782,7 @@ void HudDrawGraphics(int centre)
         DrawTextPix(assets.font, line, V2(x, rowY), 1,
                     sel ? (Color){ 255, 236, 159, 255 } : COL_SHALLOW);
 
-        rowY += 15.0f;
+        rowY += 13.0f;
     }
 
     float blink = 0.55f + 0.45f * sinf(g.timer * 4.0f);

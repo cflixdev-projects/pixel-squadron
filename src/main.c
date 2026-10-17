@@ -60,7 +60,7 @@ int fpsCap = 0;  /* 0 = uncapped */
 Graphics gfx = { .quality = 1, .bloomLevel = 2, .bloom = 1, .crt = 0,
                   .vignette = 1, .particles = 1, .smoke = 1,
                   .motionBlur = 0, .vsync = 0, .msaa = 1, .display = 1,
-                  .shake = 1 };
+                  .shake = 1, .winSize = 0, .volume = 10 };
 bool    g_autoTargetOn = false;   /* auto-shoot: a target is being tracked */
 Vector2 g_autoTarget    = { 0, 0 };
 int gfxPanelMode = 0;   /* pause-menu graphics screen */
@@ -78,6 +78,8 @@ static void ApplyFpsCap(void)
     SetTargetFPS((fpsCap <= 0) ? 1000 : fpsCap);
 #endif
 }
+
+static void ApplyVolume(void);   /* master gain from gfx.volume + mute flag */
 
 int pauseMenuSel = 0;
 
@@ -142,6 +144,12 @@ static void GfxSettingsLoad(void)
     if ((at = strstr(text, "shake")) != NULL &&
         sscanf(at, "shake %d", &v) == 1 && (v == 0 || v == 1))
         gfx.shake = v;
+    if ((at = strstr(text, "winSize")) != NULL &&
+        sscanf(at, "winSize %d", &v) == 1 && (v >= 0 && v <= 3))
+        gfx.winSize = v;
+    if ((at = strstr(text, "volume")) != NULL &&
+        sscanf(at, "volume %d", &v) == 1 && (v >= 0 && v <= 10))
+        gfx.volume = v;
 
     MemFree(text);
 }
@@ -152,10 +160,10 @@ static void GfxSettingsSave(void)
     snprintf(text, sizeof text,
              "quality %d\nbloomLevel %d\nbloom %d\ncrt %d\nvignette %d\n"
              "particles %d\nsmoke %d\nmotionBlur %d\nvsync %d\nmsaa %d\n"
-             "fpsCap %d\ndisplay %d\nshake %d\n",
+             "fpsCap %d\ndisplay %d\nshake %d\nwinSize %d\nvolume %d\n",
              gfx.quality, gfx.bloomLevel, gfx.bloom, gfx.crt, gfx.vignette,
              gfx.particles, gfx.smoke, gfx.motionBlur, gfx.vsync, gfx.msaa,
-             fpsCap, gfx.display, gfx.shake);
+             fpsCap, gfx.display, gfx.shake, gfx.winSize, gfx.volume);
     SaveFileText(GFX_SETTINGS_FILE, text);
 }
 
@@ -196,7 +204,11 @@ static Vector2    cameraPos;
 static bool       wantQuit = false;
 static bool       muted    = false;
 
-/* --------------------------------------------------------------------------
+/* Master gain from the volume setting, muted by the M key. */
+static void ApplyVolume(void)
+{
+    SetMasterVolume(muted ? 0.0f : (float)gfx.volume * 0.1f);
+}/* --------------------------------------------------------------------------
  *  Persistence - a single integer, kept next to the executable.
  * ----------------------------------------------------------------------- */
 #define SAVE_FILE "pixel_squadron.sav"
@@ -1387,6 +1399,9 @@ static void FitWindowToIntegerScale(int flags)
 }
 #endif
 
+/* --- window modes ------------------------------------------------------ */
+
+
 /* "Fullscreen" is a borderless window covering the monitor rather than a real
    video-mode switch. raylib's fullscreen path letterboxes its own viewport
    when the display aspect does not match the requested one, and it keeps that
@@ -1428,26 +1443,79 @@ static void SetFullscreen(bool on)
 }
 #endif
 
+static bool       exclOn   = false;
+static Vector2    exclPrevPos = { 0, 0 };
+static int        exclPrevW = 0, exclPrevH = 0;
+
+static void SetExclusiveFullscreen(bool on)
+{
+#if !defined(__EMSCRIPTEN__)
+    if (on == exclOn) return;
+    if (on) {
+        exclPrevPos = GetWindowPosition();
+        exclPrevW   = GetScreenWidth();
+        exclPrevH   = GetScreenHeight();
+        SetWindowState(FLAG_FULLSCREEN_MODE);
+    } else {
+        ClearWindowState(FLAG_FULLSCREEN_MODE);
+        SetWindowSize(exclPrevW, exclPrevH);
+        SetWindowPosition((int)exclPrevPos.x, (int)exclPrevPos.y);
+    }
+    exclOn = on;
+#endif
+}
+
+static void ApplyWindowedSize(void)
+{
+#if !defined(__EMSCRIPTEN__)
+    static const int kWs[3][2] = { {1280, 720}, {1600, 900}, {1920, 1080} };
+    if (gfx.winSize <= 0) { FitWindowToIntegerScale(START_CENTER); return; }
+    int w = kWs[gfx.winSize - 1][0];
+    int h = kWs[gfx.winSize - 1][1];
+    int mon = GetCurrentMonitor();
+    int monW = GetMonitorWidth(mon), monH = GetMonitorHeight(mon);
+    SetWindowSize(w, h);
+    if (monW > 0 && monH > 0)
+        SetWindowPosition((monW - w) / 2, (monH - h) / 2);
+#endif
+}
+
+static void SetWindowMode(int mode)
+{
+#if !defined(__EMSCRIPTEN__)
+    if (fullscreenOn) SetFullscreen(false);
+    if (exclOn)       SetExclusiveFullscreen(false);
+    switch (mode) {
+        case 1: SetFullscreen(true); break;
+        case 2: {
+            int mon = GetCurrentMonitor();
+            int monW = GetMonitorWidth(mon), monH = GetMonitorHeight(mon);
+            if (monW > 0 && monH > 0 && monW * BASE_H == monH * BASE_W)
+                SetExclusiveFullscreen(true);
+            else { SetFullscreen(true); mode = 1; }
+            break;
+        }
+        default: ApplyWindowedSize(); break;
+    }
+    gfx.display = mode;
+#endif
+}
+
 /* --------------------------------------------------------------------------
  *  Global keys
  * ----------------------------------------------------------------------- */
 static void HandleGlobalKeys(void)
 {
 #if !defined(__EMSCRIPTEN__)
-    if (IsKeyPressed(KEY_F11)) {
-        SetFullscreen(!fullscreenOn);
-        gfx.display = fullscreenOn ? 1 : 0;
-    }
+    if (IsKeyPressed(KEY_F11)) SetWindowMode(gfx.display == 0 ? 1 : 0);
 #endif
 
     if (IsKeyPressed(KEY_M)) {
         muted = !muted;
         if (muted) {
             StopSound(assets.engine);
-            SetMasterVolume(0.0f);
-        } else {
-            SetMasterVolume(1.0f);
         }
+        ApplyVolume();
     }
 
     if (IsKeyPressed(KEY_F12)) TakeScreenshot("pixel_squadron.png");
@@ -1505,7 +1573,7 @@ static void HandleGlobalKeys(void)
 
             /* ...and so does the graphics panel. */
             if (gfxPanelMode) {
-                enum { GFX_ROWS = 12 };
+                enum { GFX_ROWS = 14 };
                 if (IsKeyPressed(KEY_G) || IsKeyPressed(KEY_ESCAPE) ||
                     IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT)) {
                     gfxPanelMode = 0;
@@ -1558,28 +1626,31 @@ static void HandleGlobalKeys(void)
                             break;
                         }
                         case 9: {
-                            /* raw window plumbing: borderless-fullscreen vs
-                               windowed. The browser drives this itself, so
-                               on the web the row is display-only. */
-#if defined(__EMSCRIPTEN__)
-                            break;
-#else
-                            gfx.display = (gfx.display == 1) ? 0 : 1;
-                            if (gfx.display == 1) {
-                                SetFullscreen(true);
-                            } else {
-                                if (fullscreenOn) SetFullscreen(false);
-                                FitWindowToIntegerScale(START_CENTER);
-                            }
-#endif
+                            /* window mode: 0 windowed, 1 borderless, 2 exclusive */
+                            gfx.display = (gfx.display + dir + 3) % 3;
+                            SetWindowMode(gfx.display);
                             break;
                         }
                         case 10: {
-                            /* screen shake: explosions jog the camera */
-                            gfx.shake = (gfx.shake == 1) ? 0 : 1;
+#if !defined(__EMSCRIPTEN__)
+                            gfx.winSize = (gfx.winSize + dir + 4) % 4;
+                            if (fullscreenOn) SetFullscreen(false);
+                            if (exclOn)       SetExclusiveFullscreen(false);
+                            gfx.display = 0;
+                            ApplyWindowedSize();
+#endif
                             break;
                         }
                         case 11: {
+                            gfx.shake = (gfx.shake == 1) ? 0 : 1;
+                            break;
+                        }
+                        case 12: {
+                            gfx.volume = (gfx.volume + dir + 11) % 11;
+                            ApplyVolume();
+                            break;
+                        }
+                        case 13: {
                             static const int caps[] = { 0, 30, 60, 120, 144 };
                             int idx = 0;
                             for (int i = 0; i < 5; i++)
@@ -1750,6 +1821,7 @@ int main(int argc, char **argv)
     else          SetConfigFlags(FLAG_WINDOW_RESIZABLE);
     InitWindow(BASE_W * 3, BASE_H * 3, "Pixel Squadron - raylib twin-stick shooter");
     InitAudioDevice();
+    ApplyVolume();
 #else
     /* No VSYNC hint at boot - the saved setting gets applied right after
        InitWindow with a real swap-interval, so it can be flipped live. */
@@ -1757,6 +1829,7 @@ int main(int argc, char **argv)
     if (gfx.msaa) SetConfigFlags(FLAG_MSAA_4X_HINT);
     InitWindow(BASE_W * 3, BASE_H * 3, "Pixel Squadron - raylib twin-stick shooter");
     InitAudioDevice();
+    ApplyVolume();
 
     /* A headless demo should not hijack the desktop. */
     if (demoSeconds > 0.0f || endCard) startFlags &= ~START_FULLSCREEN;
