@@ -79,6 +79,8 @@ static Color HitTint(float k)
 }
 
 /* Grab the next free particle and return NULL when the pool is saturated. */
+void EmitSmoke(Vector2 pos);   /* uses the particle pool (defined below) */
+
 static Particle *NextParticle(void){
     static int cursor = 0;
     for (int i = 0; i < MAX_PARTICLES; i++) {
@@ -145,6 +147,7 @@ Bullet *SpawnBullet(Vector2 pos, Vector2 vel, int sprite, float damage, float li
 
 void SpawnBurst(Vector2 pos, float scale)
 {
+    if (gfx.smoke) EmitSmoke(pos);
     static int cursor = 0;
     for (int i = 0; i < MAX_BURSTS; i++) {
         int idx = (cursor + i) % MAX_BURSTS;
@@ -154,6 +157,37 @@ void SpawnBurst(Vector2 pos, float scale)
         cursor = idx + 1;
         *b = (Burst){ .alive = true, .pos = pos, .t = 0.0f, .scale = scale };
         return;
+    }
+}
+
+/* Explosion smoke: lazy grey puffs that hang where the bang was and drift
+   upward while they thin out. A setting, because on a small screen the
+   clean shapes can read better without the haze. */
+void EmitSmoke(Vector2 pos)
+{
+    int n = 4 + GetRandomValue(0, 3);
+    for (int i = 0; i < n; i++) {
+        Particle *q = NextParticle();
+        if (!q) return;
+
+        float ang = (float)GetRandomValue(0, 359) * DEG2RAD;
+        float spd = 6.0f + (float)GetRandomValue(0, 26);
+
+        *q = (Particle){
+            .alive   = true,
+            .pos     = V2Add(pos, V2((float)(GetRandomValue(-6, 6)),
+                                     (float)(GetRandomValue(-6, 6)))),
+            .vel     = V2(cosf(ang) * spd * 0.4f,
+                          -8.0f - (float)GetRandomValue(0, 14)),
+            .life    = 1.1f + (float)GetRandomValue(0, 90) / 100.0f,
+            .maxLife = 1.0f,   /* set below, together with life     */
+            .size    = 2.0f + (float)GetRandomValue(0, 26) / 10.0f,
+            .angle   = 0.0f,
+            .spin    = ((float)GetRandomValue(-40, 40)) * 0.004f,
+            .smoke   = true,
+            .color   = (Color){ 96, 96, 106, 90 },
+        };
+        q->maxLife = q->life;
     }
 }
 
@@ -480,19 +514,26 @@ enum {
 
 typedef struct {
     const char *name;
+    const char *shortName;   /* cramped spots: the wingmen panel */
     float cooldown;
 } SpecialDef;
 
 static const SpecialDef kSpecials[SPECIAL_KIND_COUNT] = {
-    { "OVERSURGE",     15.0f },
-    { "BROADSIDE",      9.0f },
-    { "NOVA LANCE",     8.0f },
-    { "IRON RAIN",      6.0f },
-    { "AEGIS FIELD",   16.0f },
-    { "TRIAGE PULSE",  10.0f },
-    { "WASP SWARM",    11.0f },
-    { "STING BARRAGE",  7.0f },
+    { "OVERSURGE",     "OVSRG",  15.0f },
+    { "BROADSIDE",     "BRDSL",   9.0f },
+    { "NOVA LANCE",    "NOVA",    8.0f },
+    { "IRON RAIN",     "IRON",    6.0f },
+    { "AEGIS FIELD",   "AEGIS",  16.0f },
+    { "TRIAGE PULSE",  "TRIAGE", 10.0f },
+    { "WASP SWARM",    "WASP",   11.0f },
+    { "STING BARRAGE", "STING",   7.0f },
 };
+
+const char *SpecialShort(int kind)
+{
+    if (kind < 0 || kind >= SPECIAL_KIND_COUNT) kind = 0;
+    return kSpecials[kind].shortName;
+}
 
 /* Which moves each pilot has in the bag. -1 ends the list. */
 static const int kRoleSpecials[ALLY_ROLE_COUNT][3] = {
@@ -763,8 +804,9 @@ void PlayerSpecial(void)
 void FieldCast(Ally *caster)
 {
     g.field = (AegisField){
-        .alive   = true,
-        .pos     = caster ? caster->pos : g.player.pos,
+        .alive    = true,
+        .onPlayer = (caster == NULL),
+        .pos      = caster ? caster->pos : g.player.pos,
         .life    = FIELD_LIFE,
         .radius  = FIELD_RADIUS,
         .pulse   = 0.0f,
@@ -784,9 +826,15 @@ void FieldUpdate(float dt)
     f->life  -= dt;
     f->pulse += dt;
 
-    for (int i = 0; i < MAX_ALLIES; i++) {
-        Ally *a = &g.allies[i];
-        if (a->alive && a->role == ALLY_JUNO) { f->pos = a->pos; break; }
+    /* Whoever cast the dome, the dome stays with them: the player's field
+       never jumps onto JUNO, and JUNO's own still rides with her. */
+    if (f->onPlayer) {
+        f->pos = g.player.pos;
+    } else {
+        for (int i = 0; i < MAX_ALLIES; i++) {
+            Ally *a = &g.allies[i];
+            if (a->alive && a->role == ALLY_JUNO) { f->pos = a->pos; break; }
+        }
     }
 
     if (f->life <= 0.0f) {
@@ -1793,6 +1841,7 @@ int         PlayerSpecialCount(void) { return SPECIAL_KIND_COUNT; }
 const char *PlayerSpecialName(int idx) { return kSpecials[idx].name; }
 float       PlayerSpecialCooldown(int idx) { return kSpecials[idx].cooldown; }
 const char *AllySpecialName(const Ally *a) { return kSpecials[RoleSpecial(a->role, a->specialSel)].name; }
+const char *AllySpecialShort(const Ally *a) { return kSpecials[RoleSpecial(a->role, a->specialSel)].shortName; }
 float       AllySpecialCooldown(const Ally *a) { return kSpecials[RoleSpecial(a->role, a->specialSel)].cooldown; }
 
 void AllySpecial(Ally *a)
@@ -2559,8 +2608,9 @@ void ParticlesUpdate(float dt)
         p->life -= dt;
         if (p->life <= 0.0f) { p->alive = false; continue; }
 
-        p->pos    = V2Add(p->pos, V2Scale(p->vel, dt));
-        p->vel    = V2Scale(p->vel, 1.0f - fminf(1.0f, 3.2f * dt));
+        p->pos = V2Add(p->pos, V2Scale(p->vel, dt));
+        /* smoke is lazy - it needs a lot more hang time than sparks do   */
+        p->vel    = V2Scale(p->vel, 1.0f - fminf(1.0f, (p->smoke ? 0.7f : 3.2f) * dt));
         p->angle += p->spin * dt;
     }
 }
@@ -2573,10 +2623,16 @@ void ParticlesDraw(void)
 
         float k = p->life / p->maxLife;
         Color c = p->color;
-        c.a = (unsigned char)(255.0f * Clamp(k * 1.6f, 0.0f, 1.0f));
 
-        /* whole pixels and whole sizes, otherwise the sparkle crawls */
-        float size = floorf(p->size * (0.4f + k * 0.6f) + 0.5f);
+        float size;
+        if (p->smoke) {
+            /* puffs swell as they thin, never more than a whisper */
+            c.a  = (unsigned char)(fminf(90.0f, c.a) * Clamp(k, 0.0f, 1.0f));
+            size = floorf(p->size * (0.85f + (1.0f - k) * 0.9f) + 0.5f);
+        } else {
+            c.a = (unsigned char)(255.0f * Clamp(k * 1.6f, 0.0f, 1.0f));
+            size = floorf(p->size * (0.4f + k * 0.6f) + 0.5f);
+        }
         if (size < 1.0f) size = 1.0f;
 
         Rectangle rec = { SnapPix(p->pos.x - size * 0.5f) + size * 0.5f,

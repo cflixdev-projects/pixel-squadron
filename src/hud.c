@@ -146,7 +146,7 @@ static void DrawWingmanRow(int i, float y)
                           (unsigned char)(250.0f - 5.0f * namePulse),
                           (unsigned char)(120.0f + 135.0f * namePulse) }
                : (Color){ 74, 92, 110, 255 };
-    DrawTextPix(assets.font, AllySpecialName(a), V2(118.0f, y), 1, spec);
+    DrawTextPix(assets.font, AllySpecialShort(a), V2(118.0f, y), 1, spec);
 }
 
 void HudDraw(Camera2D cam)
@@ -174,7 +174,7 @@ void HudDraw(Camera2D cam)
     /* --- the squadron, below the hull panel --------------------------- */
     /* Taller rows with a clear gap under the heading: at the old 11px pitch
        the first name ran straight into the "WINGMEN" title. */
-    DrawPanel((Rectangle){ 6, 38, 150, 64 });
+    DrawPanel((Rectangle){ 6, 38, 192, 64 });
     DrawTextPixShadow(assets.font, "WINGMEN", V2(10, 42), 1, COL_SHALLOW);
 
     for (int i = 0; i < MAX_ALLIES; i++)
@@ -236,9 +236,13 @@ void HudDraw(Camera2D cam)
     float y = RENDER_H - 30.0f;
 
     /* Boost is a core control, so its meter is always on. */
-    /* boost is the "panic" pedal: label it in alarm red so it reads at a
-       glance in a crowded corner */
-    DrawTextPixShadow(assets.font, boostLabel, V2(bx, y), 1, (Color){ 255, 74, 74, 255 });
+    /* the label mirrors the tank: calm green while there is fuel, a soft
+       warning red only when the pedal is nearly dead */
+    float boostFrac = p->boostFuel / PLAYER_BOOST_FUEL;
+    Color boostColor = (boostFrac <= 0.05f) ? (Color){ 232, 120, 112, 230 }
+                     : (boostFrac >= 0.99f) ? (Color){ 142, 226, 158, 210 }
+                                            : (Color){ 203, 222, 235, 200 };
+    DrawTextPixShadow(assets.font, boostLabel, V2(bx, y), 1, boostColor);
     DrawTimerBar((Rectangle){ bx, y + 13, bw, 5 }, p->boostFuel / PLAYER_BOOST_FUEL,
                  (Color){ 255, 236, 159, 230 });
 
@@ -452,9 +456,9 @@ void HudDraw(Camera2D cam)
         float fw = TextWidthPix(assets.font, fpsBuf, 1);
 
         float bx = RENDER_W - fw - 14.0f;
-        float by = RENDER_H - 26.0f;
-        DrawRectangle((int)(bx - 5.0f), (int)(by - 3.0f),
-                      (int)(fw + 10.0f), 15, (Color){ 0, 0, 0, 170 });
+        float by = RENDER_H - 27.0f;
+        DrawRectangle((int)(bx - 5.0f), (int)(by - 4.0f),
+                      (int)(fw + 10.0f), 20, (Color){ 0, 0, 0, 170 });
         DrawTextPix(assets.font, fpsBuf, V2(bx, by), 1,
                     (Color){ 200, 220, 240, 220 });
     }
@@ -639,75 +643,67 @@ void HudDrawGraphics(int centre)
         const char *label;
         const char *options[3];
     } kRows[] = {
-        { "QUALITY",   { "LOW", "MEDIUM", "HIGH" } },
-        { "BLOOM",     { "OFF", "ON", NULL } },
-        { "SCANLINES", { "OFF", "ON", NULL } },
-        { "VIGNETTE",  { "OFF", "ON", NULL } },
-        { "PARTICLES", { "SIMPLE", "RICH", NULL } },
+        { "QUALITY",    { "LOW", "MEDIUM", "HIGH" } },
+        { "BLOOM",      { "OFF", "ON", NULL } },
+        { "CRT SCREEN", { "OFF", "ON", NULL } },
+        { "VIGNETTE",   { "OFF", "ON", NULL } },
+        { "PARTICLES",  { "SIMPLE", "RICH", NULL } },
+        { "SMOKE",      { "OFF", "ON", NULL } },
+        { "MOTION BLUR",{ "OFF", "ON", NULL } },
     };
     const int kRowsCount = (int)(sizeof kRows / sizeof kRows[0]);
+    const int kTotal = kRowsCount + 1;   /* + fps cap */
 
-    DrawTextCentered("GRAPHICS", centre - 76, 2, assets.font, COL_FOAM);
-    DrawTextCentered("A/D OR ARROW KEYS - CHANGE", centre - 50, 1,
-                     assets.font, (Color){ 126, 226, 250, 170 });
-
-    float x = floorf((float)RENDER_W * 0.5f) - 88.0f;
-    float y = (float)centre - 28.0f;
+    float x = floorf((float)RENDER_W * 0.5f) - 96.0f;
+    float rowY = (float)centre - 62.0f;
 
     char line[64];
 
-    for (int i = 0; i < kRowsCount; i++) {
+    DrawTextCentered("GRAPHICS", centre - 92, 2, assets.font, COL_FOAM);
+
+    for (int i = 0; i < kTotal; i++) {
         bool sel = (i == gfxPanelSel);
 
         /* the value each row shows right now */
         const char *value;
-        switch (i) {
-            case 0: value = kRows[0].options[gfx.quality];   break;
-            case 1: value = kRows[1].options[gfx.bloom];     break;
-            case 2: value = kRows[2].options[gfx.scanlines]; break;
-            case 3: value = kRows[3].options[gfx.vignette];  break;
-            case 4: value = kRows[4].options[gfx.particles]; break;
+        char capText[12];
+        if (i < kRowsCount) {
+            switch (i) {
+                case 0: value = kRows[0].options[gfx.quality];    break;
+                case 1: value = kRows[1].options[gfx.bloom];     break;
+                case 2: value = kRows[2].options[gfx.crt];       break;
+                case 3: value = kRows[3].options[gfx.vignette];  break;
+                case 4: value = kRows[4].options[gfx.particles]; break;
+                case 5: value = kRows[5].options[gfx.smoke];     break;
+                case 6: value = kRows[6].options[gfx.motionBlur];break;
+                default: value = ""; break;
+            }
+        } else if (fpsCap > 0) {
+            snprintf(capText, sizeof capText, "%d", fpsCap);
+            value = capText;
+        } else {
+            value = "FREE";
         }
 
         if (sel) {
-            DrawRectangle((int)x - 10, (int)y - 4, (int)RENDER_W - (int)x * 2 + 20, 15,
+            DrawRectangle((int)x - 10, (int)floorf(rowY) - 4, (int)RENDER_W - (int)x * 2 + 20, 14,
                           (Color){ 255, 186, 92, 60 });
-            DrawRectangle((int)x - 10, (int)y - 4, 2, 15,
+            DrawRectangle((int)x - 10, (int)floorf(rowY) - 4, 2, 14,
                           (Color){ 255, 236, 159, 255 });
         }
 
-        snprintf(line, sizeof line, "%-9s %s", kRows[i].label, value);
-        DrawTextPix(assets.font, line, V2(x, y), 1,
+        snprintf(line, sizeof line, "%-11s %s", (i < kRowsCount) ? kRows[i].label : "FPS CAP", value);
+        DrawTextPix(assets.font, line, V2(x, rowY), 1,
                     sel ? (Color){ 255, 236, 159, 255 } : COL_SHALLOW);
 
-        y += 16.0f;
-    }
-
-    /* fps cap goes here too, so all of the "how fast does it run" stuff
-       lives on one screen */
-    {
-        bool sel = (5 == gfxPanelSel);
-        char cap[12];
-        if (fpsCap > 0) { snprintf(cap, sizeof cap, "%d", fpsCap); }
-        else            { snprintf(cap, sizeof cap, "FREE"); }
-
-        if (sel) {
-            DrawRectangle((int)x - 10, (int)y - 4, (int)RENDER_W - (int)x * 2 + 20, 15,
-                          (Color){ 255, 186, 92, 60 });
-            DrawRectangle((int)x - 10, (int)y - 4, 2, 15,
-                          (Color){ 255, 236, 159, 255 });
-        }
-        snprintf(line, sizeof line, "%-9s %s", "FPS CAP", cap);
-        DrawTextPix(assets.font, line, V2(x, y), 1,
-                    sel ? (Color){ 255, 236, 159, 255 } : COL_SHALLOW);
-        y += 16.0f;
+        rowY += 15.0f;
     }
 
     float blink = 0.55f + 0.45f * sinf(g.timer * 4.0f);
     Color prompt = COL_FOAM;
     prompt.a = (unsigned char)(120.0f + 135.0f * blink);
-    DrawTextCentered("G / ESC  -  BACK TO PAUSE  (SAVED AUTOMATICALLY)",
-                     centre + 76, 1, assets.font, prompt);
+    DrawTextCentered("A/D CHANGE    W/S SELECT    G / ESC BACK",
+                     RENDER_H - 14, 1, assets.font, prompt);
 }
 
 void HudDrawGraphics(int centre);
@@ -765,18 +761,27 @@ void HudDrawPause(void)
 
     if (gfxPanelMode) { HudDrawGraphics(centre); return; }
 
-    DrawTextCentered("PAUSED", centre - 34, 2, assets.font, COL_FOAM);
-    DrawTextCentered("P / ESC / START  -  RESUME", centre - 2, 1, assets.font, COL_SHALLOW);
-    DrawTextCentered("WASD / LEFT STICK - MOVE    MOUSE / RIGHT STICK - AIM",
-                     centre + 14, 1, assets.font, (Color){ 126, 226, 250, 160 });
-    DrawTextCentered("LMB / RT - FIRE    SHIFT / B - BOOST",
-                     centre + 28, 1, assets.font, (Color){ 126, 226, 250, 160 });
-    DrawTextCentered("Q/X RECALL   E/Y SPECIAL   TAB OR 1-8 LOAD ONE",
-                     centre + 42, 1, assets.font, (Color){ 126, 226, 250, 160 });
-    DrawTextCentered("G - GRAPHICS SETTINGS  (BLOOM, QUALITY, FPS CAP)",
-                     centre + 54, 1, assets.font, (Color){ 255, 200, 120, 170 });
-    DrawTextCentered("V - AUTO-SHOOT     H - CHAT POPUPS     C - PAD CONTROLS",
-                     centre + 68, 1, assets.font, (Color){ 126, 226, 250, 160 });
-    DrawTextCentered("F - FPS CAP  FREE/30/60/120/144  (SHOWN IN COUNTER)",
-                      centre + 80, 1, assets.font, (Color){ 126, 226, 250, 120 });
+    DrawTextCentered("PAUSED", centre - 52, 2, assets.font, COL_FOAM);
+
+    static const char *const kMenu[] = { "RESUME", "GRAPHICS", "CONTROLS" };
+    float x = floorf((float)RENDER_W * 0.5f) - 60.0f;
+    float y = (float)centre - 16.0f;
+    for (int i = 0; i < 3; i++) {
+        bool sel = (i == pauseMenuSel);
+        if (sel) {
+            DrawRectangle((int)x - 12, (int)y - 3, 144, 15,
+                          (Color){ 255, 186, 92, 55 });
+            DrawRectangle((int)x - 12, (int)y - 3, 2, 15,
+                          (Color){ 255, 236, 159, 255 });
+        }
+        DrawTextPix(assets.font, kMenu[i], V2(x + 4, y), 1,
+                    sel ? (Color){ 255, 236, 159, 255 } : COL_SHALLOW);
+        y += 18.0f;
+    }
+
+    float blink = 0.55f + 0.45f * sinf(g.timer * 4.0f);
+    Color prompt = COL_SHALLOW;
+    prompt.a = (unsigned char)(110.0f + 120.0f * blink);
+    DrawTextCentered("W/S + ENTER SELECT      V AUTO-SHOOT  H CHAT  L LOG  F FPS CAP",
+                     centre + 66, 1, assets.font, prompt);
 }

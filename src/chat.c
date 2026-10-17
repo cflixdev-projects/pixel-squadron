@@ -454,7 +454,9 @@ static void DrawLog(void)
 
 void ChatDraw(void)
 {
-    DrawLog();
+    /* H toggles the bubbles overhead, L toggles this log - the squadron can
+       be muted one channel at a time */
+    if (input.chatLog) DrawLog();
 
     for (int i = 0; i < MAX_ALLIES; i++) {
         ChatLine *c = LineOf(i);

@@ -21,11 +21,13 @@ Game       g     = {0};
 InputState input = {0};
 int fpsCap = 0;  /* 0 = uncapped */
 
-Graphics gfx = { .quality = 1, .bloom = 1, .scanlines = 0, .vignette = 1, .particles = 1 };
+Graphics gfx = { .quality = 1, .bloom = 1, .crt = 0, .vignette = 1,
+                  .particles = 1, .smoke = 1, .motionBlur = 0 };
 bool    g_autoTargetOn = false;   /* auto-shoot: a target is being tracked */
 Vector2 g_autoTarget    = { 0, 0 };
 int gfxPanelMode = 0;   /* pause-menu graphics screen */
 int gfxPanelSel  = 0;
+int pauseMenuSel = 0;
 
 #define GFX_SETTINGS_FILE "settings.cfg"
 
@@ -38,14 +40,21 @@ static void GfxSettingsLoad(void)
 
     int v;
     if (sscanf(text, "quality %d", &v) == 1 && v >= 0 && v <= 2) gfx.quality = v;
-    if (strstr(text, "bloom 1")            != NULL) gfx.bloom      = 1;
-    else if (strstr(text, "bloom 0")       != NULL) gfx.bloom      = 0;
-    if (strstr(text, "scanlines 1")        != NULL) gfx.scanlines  = 1;
-    else if (strstr(text, "scanlines 0")   != NULL) gfx.scanlines  = 0;
-    if (strstr(text, "vignette 1")         != NULL) gfx.vignette   = 1;
-    else if (strstr(text, "vignette 0")    != NULL) gfx.vignette   = 0;
-    if (strstr(text, "particles 1")        != NULL) gfx.particles  = 1;
-    else if (strstr(text, "particles 0")   != NULL) gfx.particles  = 0;
+    if (strstr(text, "bloom 1")            != NULL) gfx.bloom       = 1;
+    else if (strstr(text, "bloom 0")       != NULL) gfx.bloom       = 0;
+    /* the old hard scanline overlay grew into the CRT pass; honour both */
+    if (strstr(text, "crt 1")              != NULL) gfx.crt         = 1;
+    else if (strstr(text, "crt 0")         != NULL) gfx.crt         = 0;
+    else if (strstr(text, "scanlines 1")   != NULL) gfx.crt         = 1;
+    else if (strstr(text, "scanlines 0")   != NULL) gfx.crt         = 0;
+    if (strstr(text, "vignette 1")         != NULL) gfx.vignette    = 1;
+    else if (strstr(text, "vignette 0")    != NULL) gfx.vignette    = 0;
+    if (strstr(text, "particles 1")        != NULL) gfx.particles   = 1;
+    else if (strstr(text, "particles 0")   != NULL) gfx.particles   = 0;
+    if (strstr(text, "smoke 1")            != NULL) gfx.smoke       = 1;
+    else if (strstr(text, "smoke 0")       != NULL) gfx.smoke       = 0;
+    if (strstr(text, "motionBlur 1")       != NULL) gfx.motionBlur  = 1;
+    else if (strstr(text, "motionBlur 0")  != NULL) gfx.motionBlur  = 0;
     if (sscanf(text, "fpsCap %d", &v) == 1)
         fpsCap = (v == 0 || v == 30 || v == 60 || v == 120 || v == 144) ? v : 0;
 
@@ -56,10 +65,10 @@ static void GfxSettingsSave(void)
 {
     char text[256];
     snprintf(text, sizeof text,
-             "quality %d\nbloom %d\nscanlines %d\nvignette %d\n"
-             "particles %d\nfpsCap %d\n",
-             gfx.quality, gfx.bloom, gfx.scanlines, gfx.vignette,
-             gfx.particles, fpsCap);
+             "quality %d\nbloom %d\ncrt %d\nvignette %d\n"
+             "particles %d\nsmoke %d\nmotionBlur %d\nfpsCap %d\n",
+             gfx.quality, gfx.bloom, gfx.crt, gfx.vignette,
+             gfx.particles, gfx.smoke, gfx.motionBlur, fpsCap);
     SaveFileText(GFX_SETTINGS_FILE, text);
 }
 
@@ -68,9 +77,18 @@ static void GfxApplyQuality(int q)
 {
     gfx.quality = q;
     switch (q) {
-        case 0:  gfx.bloom = 0; gfx.scanlines = 0; gfx.vignette = 0; gfx.particles = 0; break;
-        case 1:  gfx.bloom = 1; gfx.scanlines = 0; gfx.vignette = 1; gfx.particles = 1; break;
-        default: gfx.bloom = 1; gfx.scanlines = 1; gfx.vignette = 1; gfx.particles = 1; break;
+        case 0:  /* LOW: every post effect off, shortest particle list */
+            gfx.bloom = 0; gfx.crt = 0; gfx.vignette = 0; gfx.particles = 0;
+            gfx.smoke = 0; gfx.motionBlur = 0;
+            break;
+        case 1:  /* MEDIUM: the game's intended look without tube tricks */
+            gfx.bloom = 1; gfx.crt = 0; gfx.vignette = 1; gfx.particles = 1;
+            gfx.smoke = 1; gfx.motionBlur = 0;
+            break;
+        default: /* HIGH: everything, softly */
+            gfx.bloom = 1; gfx.crt = 1; gfx.vignette = 1; gfx.particles = 1;
+            gfx.smoke = 1; gfx.motionBlur = 1;
+            break;
     }
 }
 
@@ -450,6 +468,7 @@ static void GatherInput(void)
        be muted the same way (H / BACK) without touching the radio log. */
     static bool autoShoot  = false;
     static bool chatPopups = true;
+    static bool chatLog    = true;
     if (IsKeyPressed(KEY_V) ||
         IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_FACE_DOWN)) {
         autoShoot  = !autoShoot;
@@ -460,6 +479,14 @@ static void GatherInput(void)
         IsGamepadButtonPressed(0, GAMEPAD_BUTTON_MIDDLE_LEFT)) {
         chatPopups = !chatPopups;
         TextCopy(g.message, chatPopups ? "CHAT POPUPS ON" : "CHAT POPUPS OFF");
+        g.messageTimer = 1.2f;
+    }
+    /* and the radio log on the right gets its own switch (L / menu button),
+       so the whole squadron can be silenced without turning off either. */
+    if (IsKeyPressed(KEY_L) ||
+        IsGamepadButtonPressed(0, GAMEPAD_BUTTON_MIDDLE_RIGHT)) {
+        chatLog = !chatLog;
+        TextCopy(g.message, chatLog ? "CHAT LOG ON" : "CHAT LOG OFF");
         g.messageTimer = 1.2f;
     }
 
@@ -503,8 +530,10 @@ static void GatherInput(void)
        player only steers. The HUD can draw thanks to the exported target. */
     g_autoTargetOn = false;
     if (autoShoot) {
+        /* no range limit: auto-shoot is supposed to take over the aim as
+           soon as anything hostile exists on the map */
         Enemy *best = NULL;
-        float bestD = 430.0f * 430.0f;
+        float bestD = 1.0e30f;
         for (int i = 0; i < MAX_ENEMIES; i++) {
             Enemy *e = &g.enemies[i];
             if (!e->alive || e->spawnFade > 0.0f) continue;
@@ -578,6 +607,7 @@ static void GatherInput(void)
     input.usingGamepad = padMode;
     input.autoAim      = autoShoot;
     input.chatPopups   = chatPopups;
+    input.chatLog      = chatLog;
     if (mouseVirtual.x != mouseVirtual.x || mouseVirtual.y != mouseVirtual.y) {
         mouseVirtual = V2(BASE_W * 0.5f, BASE_H * 0.5f);
     }
@@ -815,95 +845,162 @@ static void UpdateTitleCamera(void)
  *  Everything is switchable from the pause menu's graphics panel and the
  *  presets, and every stage fails soft: no shader, no bloom, game runs.
  * ----------------------------------------------------------------------- */
-static Shader       bloomShader = { 0 };
-static RenderTexture bloomRT    = { 0 };
-static Texture2D    scanTex;
-static Texture2D    vignTex;
-static int          uTexel     = -1;
-static int          uStrength  = -1;
-static bool         postLoaded = false;
-static bool         bloomOK    = false;
+static Shader        bloomShader = { 0 };
+static Shader        crtShader   = { 0 };
+static Shader        trailShader = { 0 };
+static RenderTexture bloomRT     = { 0 };
+static RenderTexture trailRT[2]  = { { 0 }, { 0 } };
+static int           trailCur    = 0;
+static Texture2D     vignTex;
+static int           uTexel     = -1;
+static int           uStrength  = -1;
+static int           uCrtTime   = -1;
+static int           uCrtScan   = -1;
+static int           uPrevSam   = -1;
+static int           uDecay     = -1;
+static bool          postLoaded = false;
+static bool          bloomOK    = false;
+static bool          crtOK      = false;
+static bool          trailOK    = false;
 
+/* GLSL dual-header: Emscripten runs WebGL (GLSL ES 100), desktop GPUs get
+   core 330. Everything else stays shared below. */
 #if defined(__EMSCRIPTEN__)
-static const char *kBloomFs =
-"#version 100\n"
-"precision mediump float;\n"
-"varying vec2 fragTexCoord;\n"
-"uniform sampler2D texture0;\n"
-"uniform vec2 texelSize;\n"
-"uniform float strength;\n"
-"#define SAMPLE(tex,uv) texture2D(tex, uv)\n"
-"void main() {\n"
-"    vec3  c   = SAMPLE(texture0, fragTexCoord).rgb;\n"
-"    float lum = dot(c, vec3(0.299, 0.587, 0.114));\n"
-"    vec2  r   = texelSize * 3.0;\n"
-"    vec3  sum = vec3(0.0);\n"
-"    for (int i = 0; i < 8; i++) {\n"
-"        float ang = 3.14159265 * 0.25 * float(i);\n"
-"        vec2  off = vec2(cos(ang), sin(ang)) * r;\n"
-"        vec3  s   = SAMPLE(texture0, fragTexCoord + off).rgb;\n"
-"        float b   = dot(s, vec3(0.299, 0.587, 0.114)) - 0.55;\n"
-"        sum      += s * max(b, 0.0);\n"
-"    }\n"
-"    gl_FragColor = vec4(sum * strength * 0.25, 1.0);\n"
-"}\n";
+#define GLSL_FS_HEADER \
+    "#version 100\n" \
+    "precision mediump float;\n" \
+    "varying vec2 fragTexCoord;\n" \
+    "#define SAMPLE(t,uv) texture2D(t, uv)\n"
+#define GLSL_FS_OUT "gl_FragColor"
 #else
-static const char *kBloomFs =
-"#version 330\n"
-"in vec2 fragTexCoord;\n"
-"uniform sampler2D texture0;\n"
-"uniform vec2 texelSize;\n"
-"uniform float strength;\n"
-"#define SAMPLE(tex,uv) texture(tex, uv)\n"
-"out vec4 finalColor;\n"
-"void main() {\n"
-"    vec3  c   = SAMPLE(texture0, fragTexCoord).rgb;\n"
-"    float lum = dot(c, vec3(0.299, 0.587, 0.114));\n"
-"    vec2  r   = texelSize * 3.0;\n"
-"    vec3  sum = vec3(0.0);\n"
-"    for (int i = 0; i < 8; i++) {\n"
-"        float ang = 3.14159265 * 0.25 * float(i);\n"
-"        vec2  off = vec2(cos(ang), sin(ang)) * r;\n"
-"        vec3  s   = SAMPLE(texture0, fragTexCoord + off).rgb;\n"
-"        float b   = dot(s, vec3(0.299, 0.587, 0.114)) - 0.55;\n"
-"        sum      += s * max(b, 0.0);\n"
-"    }\n"
-"    finalColor = vec4(sum * strength * 0.25, 1.0);\n"
-"}\n";
+#define GLSL_FS_HEADER \
+    "#version 330\n" \
+    "in vec2 fragTexCoord;\n" \
+    "#define SAMPLE(t,uv) texture(t, uv)\n" \
+    "out vec4 finalColor;\n"
+#define GLSL_FS_OUT "finalColor"
 #endif
+
+/* ---- bloom ----
+   Bright-pass first, blur second: only pixels that are already glowing
+   (rounds, muzzles, explosions - R/G/B near or at 1.0) survive the
+   threshold, so ground, hulls and HUD stay matte and only light sources
+   bleed a halo. Strength is deliberately low; bloom should be felt, not
+   seen. */
+static const char *kBloomFs =
+    GLSL_FS_HEADER
+    "uniform sampler2D texture0;\n"
+    "uniform vec2 texelSize;\n"
+    "uniform float strength;\n"
+    "void main() {\n"
+    "    vec3 sum = vec3(0.0);\n"
+    "    for (int i = 0; i < 8; i++) {\n"
+    "        float ang = 6.2831853 * 0.125 * float(i);\n"
+    "        vec2  off = vec2(cos(ang), sin(ang)) * texelSize * 1.8;\n"
+    "        vec3  s   = SAMPLE(texture0, fragTexCoord + off).rgb;\n"
+    "        float m   = max(s.r, max(s.g, s.b));\n"
+    "        sum      += s * smoothstep(0.88, 1.02, m);\n"
+    "    }\n"
+    "    " GLSL_FS_OUT " = vec4(sum * 0.125 * strength, 1.0);\n"
+    "}\n";
+
+/* ---- CRT screen ----
+   A cheap tube, done softly: slight barrel curve, edge-only colour
+   separation, a gentle sine shading per line (no hard stripes), faint
+   phosphor shimmer, static grain and a falloff baked into the glass. Every
+   few seconds one horizontal band hiccups sideways for a single tick -
+   the glitch, subtle by default. */
+static const char *kCrtFs =
+    GLSL_FS_HEADER
+    "uniform sampler2D texture0;\n"
+    "uniform float uTime;\n"
+    "uniform float uScan;\n"
+    "float hash(vec2 p) {\n"
+    "    return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);\n"
+    "}\n"
+    "vec2 curve(vec2 uv) {\n"
+    "    uv = uv * 2.0 - 1.0;\n"
+    "    vec2 o = abs(uv.yx) / vec2(7.5, 5.5);\n"
+    "    uv += uv * o * o;\n"
+    "    return uv * 0.5 + 0.5;\n"
+    "}\n"
+    "void main() {\n"
+    "    vec2 uv = curve(fragTexCoord);\n"
+    "    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {\n"
+    "        " GLSL_FS_OUT " = vec4(0.0, 0.0, 0.0, 1.0);\n"
+    "        return;\n"
+    "    }\n"
+    "    float tt   = floor(uTime * 9.0);\n"
+    "    float band = floor(uv.y * 44.0);\n"
+    "    float g    = step(0.985, hash(vec2(tt, band)));\n"
+    "    float dx   = (hash(vec2(tt + 7.1, band)) - 0.5) * 0.020 * g;\n"
+    "    vec2  ca   = uv - 0.5;\n"
+    "    float amt  = 0.0012 + dot(ca, ca) * 0.008 + g * 0.004;\n"
+    "    vec3  col;\n"
+    "    col.r = SAMPLE(texture0, uv + vec2(dx + amt, 0.0)).r;\n"
+    "    col.g = SAMPLE(texture0, uv + vec2(dx,        0.0)).g;\n"
+    "    col.b = SAMPLE(texture0, uv + vec2(dx - amt, 0.0)).b;\n"
+    "    float sc = sin(uv.y * uScan * 3.14159265) * 0.5 + 0.5;\n"
+    "    col *= 0.955 + 0.045 * sc;\n"
+    "    col *= 1.0 + 0.02 * sin(uTime * 2.3 + uv.y * 9.0);\n"
+    "    col += (hash(uv + fract(uTime)) - 0.5) * 0.028;\n"
+    "    float vig = smoothstep(1.18, 0.38, length(uv - 0.5) * 1.55);\n"
+    "    col *= 0.74 + 0.26 * vig;\n"
+    "    " GLSL_FS_OUT " = vec4(col, 1.0);\n"
+    "}\n";
+
+/* ---- motion blur ----
+   Feedback trails: each frame the previous composite decays and the
+   brighter of the two wins, so fast lights draw a fading tail behind
+   them. The decay uniform is recomputed per frame from the real dt, so
+   the trail length is the same at any frame rate. */
+static const char *kTrailFs =
+    GLSL_FS_HEADER
+    "uniform sampler2D texture0;\n"
+    "uniform sampler2D prev;\n"
+    "uniform float decay;\n"
+    "void main() {\n"
+    "    vec3 c = SAMPLE(texture0, fragTexCoord).rgb;\n"
+    "    vec3 h = SAMPLE(prev, fragTexCoord).rgb * decay;\n"
+    "    " GLSL_FS_OUT " = vec4(max(c, h), 1.0);\n"
+    "}\n";
 
 void RebuildBloomRT(int w, int h)
 {
     if (!postLoaded) return;
+
     if (bloomRT.id != 0) UnloadRenderTexture(bloomRT);
     bloomRT = LoadRenderTexture((w + 1) / 2, (h + 1) / 2);
     SetTextureFilter(bloomRT.texture, TEXTURE_FILTER_BILINEAR);
+
+    for (int i = 0; i < 2; i++) {
+        if (trailRT[i].id != 0) UnloadRenderTexture(trailRT[i]);
+        trailRT[i] = LoadRenderTexture(w, h);
+        SetTextureFilter(trailRT[i].texture, TEXTURE_FILTER_POINT);
+    }
+    trailCur = 0;
 }
 
 /* overlay art built once: a scanline mask and a soft vignette at the game's
    own virtual resolution - they stretch with the blit, so they scale clean */
 static void BuildOverlayTextures(void)
 {
-    Image img = GenImageColor(BASE_W, BASE_H, BLANK);
-    Color dark = { 4, 10, 16, 40 };
-    for (int y = 1; y < BASE_H; y += 2)
-        for (int x = 0; x < BASE_W; x++)
-            ImageDrawPixel(&img, x, y, dark);
-    scanTex = LoadTextureFromImage(img);
-    SetTextureFilter(scanTex, TEXTURE_FILTER_POINT);
-    UnloadImage(img);
-
+    /* The hard scanline overlay is gone - a CRT belongs in a shader, where
+       the lines can be soft sine shading instead ofa few black stripes. */
+    Image img;
+    /* the corners sit at d~0.71, so the ramp has to actually reach there -
+       the first version faded out before the screen edge began */
     img = GenImageColor(BASE_W, BASE_H, BLANK);
     for (int y = 0; y < BASE_H; y++) {
         for (int x = 0; x < BASE_W; x++) {
             float dx = (x / (BASE_W - 1.0f)) * 2.0f - 1.0f;
             float dy = (y / (BASE_H - 1.0f)) * 2.0f - 1.0f;
-            float d  = sqrtf(dx * dx + dy * dy) * 0.5f;         /* 0...~1.4 */
-            float t  = d - 0.62f;
+            float d  = sqrtf(dx * dx + dy * dy) * 0.5f;   /* 0 ... ~0.71 */
+            float t  = (d - 0.42f) / 0.30f;
             if (t <= 0.0f) continue;
             if (t > 1.0f) t = 1.0f;
             ImageDrawPixel(&img, x, y, (Color){ 2, 6, 12,
-                                (unsigned char)(150.0f * t * t) });
+                                (unsigned char)(168.0f * t * t) });
         }
     }
     vignTex = LoadTextureFromImage(img);
@@ -914,9 +1011,18 @@ static void BuildOverlayTextures(void)
 static void PostFxInit(void)
 {
     if (postLoaded) return;
+
     bloomShader = LoadShaderFromMemory(NULL, kBloomFs);
     uTexel    = GetShaderLocation(bloomShader, "texelSize");
     uStrength = GetShaderLocation(bloomShader, "strength");
+
+    crtShader = LoadShaderFromMemory(NULL, kCrtFs);
+    uCrtTime  = GetShaderLocation(crtShader, "uTime");
+    uCrtScan  = GetShaderLocation(crtShader, "uScan");
+
+    trailShader = LoadShaderFromMemory(NULL, kTrailFs);
+    uPrevSam    = GetShaderLocation(trailShader, "prev");
+    uDecay      = GetShaderLocation(trailShader, "decay");
 
     BuildOverlayTextures();
     postLoaded = true;
@@ -926,10 +1032,12 @@ static void PostFxInit(void)
     else {
         float zero[2] = { 0.0f, 0.0f };
         SetShaderValue(bloomShader, uTexel, zero, SHADER_UNIFORM_VEC2);
-        float one = 1.0f;
-        SetShaderValue(bloomShader, uStrength, &one, SHADER_UNIFORM_FLOAT);
+        float strength = 0.6f;
+        SetShaderValue(bloomShader, uStrength, &strength, SHADER_UNIFORM_FLOAT);
         bloomOK = true;
     }
+    crtOK   = (crtShader.id   != 0);
+    trailOK = (trailShader.id != 0);
 
     RebuildBloomRT(viewW, viewH);   /* half window res: softer blur, cheaper */
 }
@@ -938,19 +1046,43 @@ static void PostFxUnload(void)
 {
     if (!postLoaded) return;
     UnloadShader(bloomShader);
+    UnloadShader(crtShader);
+    UnloadShader(trailShader);
     if (bloomRT.id != 0) UnloadRenderTexture(bloomRT);
-    UnloadTexture(scanTex);
+    for (int i = 0; i < 2; i++)
+        if (trailRT[i].id != 0) UnloadRenderTexture(trailRT[i]);
     UnloadTexture(vignTex);
     postLoaded = false;
 }
 
-/* the bloom feed: bright, blurred copy of the finished scene */
+/* trails first, then the bloom feed off the *scene* - so lights bloom even
+   while they leave motion trails, and the trail already carries the glow */
 static void PostFxRender(void)
 {
-    if (!postLoaded || !bloomOK || !gfx.bloom || bloomRT.id == 0) return;
+    if (!postLoaded) return;
 
-    float texel[2]     = { 1.0f / (float)viewW, 1.0f / (float)viewH };
-    float strength     = 1.15f;
+    if (trailOK && gfx.motionBlur && uDecay >= 0 && uPrevSam >= 0) {
+        int   nxt    = 1 - trailCur;
+        float decay  = expf(-GetFrameTime() / 0.10f);   /* ~0.1 s tail */
+
+        BeginTextureMode(trailRT[nxt]);
+        ClearBackground(BLANK);
+        SetShaderValue(trailShader, uDecay, &decay, SHADER_UNIFORM_FLOAT);
+        SetShaderValueTexture(trailShader, uPrevSam, trailRT[trailCur].texture);
+        BeginShaderMode(trailShader);
+        DrawTexturePro(target.texture,
+                       (Rectangle){ 0.0f, 0.0f, (float)viewW, -(float)viewH },
+                       (Rectangle){ 0.0f, 0.0f, (float)viewW, (float)viewH },
+                       V2(0, 0), 0.0f, WHITE);
+        EndShaderMode();
+        EndTextureMode();
+        trailCur = nxt;
+    }
+
+    if (!bloomOK || !gfx.bloom || bloomRT.id == 0) return;
+
+    float texel[2] = { 1.0f / (float)viewW, 1.0f / (float)viewH };
+    float strength = 0.6f;
 
     BeginTextureMode(bloomRT);
     ClearBackground(BLANK);
@@ -968,7 +1100,7 @@ static void PostFxRender(void)
 }
 
 /* stacked on the window blit so the overlays follow the picture, not the UI */
-static void PostFxPresent(const Rectangle *dst)
+static void PostFxPresent(const Rectangle *dst, bool crtActive)
 {
     if (!postLoaded) return;
 
@@ -980,11 +1112,7 @@ static void PostFxPresent(const Rectangle *dst)
                        *dst, V2(0, 0), 0.0f, WHITE);
         EndBlendMode();
     }
-    if (gfx.scanlines) {
-        Rectangle src = { 0.0f, 0.0f, (float)BASE_W, (float)BASE_H };
-        DrawTexturePro(scanTex, src, *dst, V2(0, 0), 0.0f, WHITE);
-    }
-    if (gfx.vignette) {
+    if (gfx.vignette && !crtActive) {
         Rectangle src = { 0.0f, 0.0f, (float)BASE_W, (float)BASE_H };
         DrawTexturePro(vignTex, src, *dst, V2(0, 0), 0.0f, WHITE);
     }
@@ -1025,16 +1153,35 @@ static void DrawFrame(void)
 
     PostFxRender();
 
-    /* blit the virtual screen, filling the window exactly */
+    /* blit the virtual screen, filling the window exactly. With the CRT
+       setting on, the blit itself goes through the tube shader so the whole
+       picture (scene, HUD, overlays) is drawn on one screen. */
     BeginDrawing();
     ClearBackground((Color){ 8, 12, 18, 255 });
 
-    Rectangle src = { 0.0f, 0.0f, (float)target.texture.width, (float)-target.texture.height };
     Rectangle dst = { viewOffset.x, viewOffset.y,
                       RENDER_W * viewScale, RENDER_H * viewScale };
-    DrawTexturePro(target.texture, src, dst, V2(0, 0), 0.0f, WHITE);
 
-    PostFxPresent(&dst);
+    bool useTrail = (postLoaded && trailOK && gfx.motionBlur &&
+                     trailRT[trailCur].id != 0);
+    Texture2D presentTex = useTrail ? trailRT[trailCur].texture : target.texture;
+    Rectangle src = { 0.0f, 0.0f, (float)presentTex.width,
+                      -(float)presentTex.height };
+
+    bool crtActive = (crtOK && gfx.crt);
+    if (crtActive) {
+        float ut   = fmodf(g.timer, 3600.0f);
+        float scan = (float)viewH;
+        SetShaderValue(crtShader, uCrtTime, &ut, SHADER_UNIFORM_FLOAT);
+        SetShaderValue(crtShader, uCrtScan, &scan, SHADER_UNIFORM_FLOAT);
+        BeginShaderMode(crtShader);
+        DrawTexturePro(presentTex, src, dst, V2(0, 0), 0.0f, WHITE);
+        EndShaderMode();
+    } else {
+        DrawTexturePro(presentTex, src, dst, V2(0, 0), 0.0f, WHITE);
+    }
+
+    PostFxPresent(&dst, crtActive);
 
     EndDrawing();
 }
@@ -1183,19 +1330,23 @@ static void HandleGlobalKeys(void)
 
             /* ...and so does the graphics panel. */
             if (gfxPanelMode) {
-                enum { GFX_ROWS = 6 };
+                enum { GFX_ROWS = 8 };
                 if (IsKeyPressed(KEY_G) || IsKeyPressed(KEY_ESCAPE)) {
                     gfxPanelMode = 0;
                     break;
                 }
-                if (IsKeyPressed(KEY_W) || IsKeyPressed(KEY_UP))
+                if (IsKeyPressed(KEY_W) || IsKeyPressed(KEY_UP) ||
+                    IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_FACE_UP))
                     gfxPanelSel = (gfxPanelSel + GFX_ROWS - 1) % GFX_ROWS;
-                if (IsKeyPressed(KEY_S) || IsKeyPressed(KEY_DOWN))
+                if (IsKeyPressed(KEY_S) || IsKeyPressed(KEY_DOWN) ||
+                    IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_FACE_DOWN))
                     gfxPanelSel = (gfxPanelSel + 1) % GFX_ROWS;
 
                 int dir = 0;
-                if (IsKeyPressed(KEY_A) || IsKeyPressed(KEY_LEFT))  dir = -1;
-                if (IsKeyPressed(KEY_D) || IsKeyPressed(KEY_RIGHT)) dir = 1;
+                if (IsKeyPressed(KEY_A) || IsKeyPressed(KEY_LEFT) ||
+                    IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_FACE_LEFT))  dir = -1;
+                if (IsKeyPressed(KEY_D) || IsKeyPressed(KEY_RIGHT) ||
+                    IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_FACE_RIGHT)) dir = 1;
                 if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE) ||
                     IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_FACE_DOWN)) dir = 1;
 
@@ -1203,10 +1354,12 @@ static void HandleGlobalKeys(void)
                     switch (gfxPanelSel) {
                         case 0: GfxApplyQuality((gfx.quality + dir + 3) % 3); break;
                         case 1: gfx.bloom      = !gfx.bloom;     break;
-                        case 2: gfx.scanlines  = !gfx.scanlines; break;
+                        case 2: gfx.crt        = !gfx.crt;       break;
                         case 3: gfx.vignette   = !gfx.vignette;  break;
                         case 4: gfx.particles  = !gfx.particles; break;
-                        case 5: {
+                        case 5: gfx.smoke      = !gfx.smoke;     break;
+                        case 6: gfx.motionBlur = !gfx.motionBlur; break;
+                        case 7: {
                             static const int caps[] = { 0, 30, 60, 120, 144 };
                             int idx = 0;
                             for (int i = 0; i < 5; i++)
@@ -1221,8 +1374,23 @@ static void HandleGlobalKeys(void)
                 break;
             }
 
-            if (IsKeyPressed(KEY_G)) { gfxPanelMode = 1; gfxPanelSel = 0; break; }
-            if (IsKeyPressed(KEY_C)) { remapActive = true; remapArmed = false; break; }
+            /* pause main menu: three entries, gamepad friendly */
+            if (IsKeyPressed(KEY_W) || IsKeyPressed(KEY_UP) ||
+                IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_FACE_UP))
+                pauseMenuSel = (pauseMenuSel + 2) % 3;
+            if (IsKeyPressed(KEY_S) || IsKeyPressed(KEY_DOWN) ||
+                IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_FACE_DOWN))
+                pauseMenuSel = (pauseMenuSel + 1) % 3;
+
+            if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE) ||
+                IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_FACE_DOWN)) {
+                switch (pauseMenuSel) {
+                    case 0: g.state = STATE_PLAY; break;
+                    case 1: gfxPanelMode = 1; gfxPanelSel = 0; break;
+                    case 2: remapActive = true; remapArmed = false; break;
+                }
+                break;
+            }
 
 
             /* Escape: if we are still in fullscreen, the first press already
@@ -1355,6 +1523,11 @@ int main(int argc, char **argv)
 #endif
 
     SetExitKey(KEY_NULL);          /* we handle Escape ourselves */
+#ifndef __EMSCRIPTEN__
+    /* the game draws its own aiming cursor (or none at all during auto
+       shoot), so the OS arrow would just hover around on top of art */
+    HideCursor();
+#endif
     GfxSettingsLoad();
     SetTargetFPS((fpsCap <= 0) ? 1000 : fpsCap);  /* 0 = uncapped */
     SetRandomSeed(seed ? seed : (unsigned)time(NULL));

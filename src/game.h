@@ -349,6 +349,8 @@ int         PlayerSpecialCount(void);
 const char *PlayerSpecialName(int idx);
 float       PlayerSpecialCooldown(int idx);
 const char *AllySpecialName(const Ally *a);
+const char *AllySpecialShort(const Ally *a);
+const char *SpecialShort(int kind);
 float       AllySpecialCooldown(const Ally *a);
 
 typedef struct {
@@ -370,6 +372,7 @@ typedef struct {
     float life, maxLife;
     float size;
     float angle, spin;
+    bool smoke;   /* grey puff: swells and thins instead of sparkling */
     Color color;
 } Particle;
 
@@ -413,6 +416,7 @@ typedef struct {
    to breathe, look at the board and take the fight back up on its own terms. */
 typedef struct {
     bool    alive;
+    bool    onPlayer; /* the player cast it, so it rides with the player   */
     Vector2 pos;      /* follows the caster while it holds */
     float   life;     /* seconds left                      */
     float   radius;
@@ -440,6 +444,7 @@ typedef struct {
     bool usingGamepad;
     bool autoAim;         /* auto-shoot mode is toggled on   */
     bool chatPopups;      /* chat speech bubbles shown       */
+    bool chatLog;         /* right-side radio log shown      */
 } InputState;
 
 extern InputState input;
@@ -612,17 +617,20 @@ extern Vector2 g_autoTarget;  /* ...and this is where it is      */
 /* Renderer quality knobs, all reachable from the pause menu's graphics
    panel and persisted across sessions. */
 typedef struct {
-    int quality;   /* preset: 0 low, 1 medium, 2 high */
-    int bloom;     /* glowing post-process pass      */
-    int scanlines; /* CRT overlay                    */
-    int vignette;  /* dark corners                   */
-    int particles; /* 0 simple, 1 rich burst counts  */
+    int quality;    /* preset: 0 low, 1 medium, 2 high        */
+    int bloom;      /* glow on shots, explosions, bright bits */
+    int crt;        /* soft tube look: scan, glitch, falloff  */
+    int vignette;   /* dark corners (when CRT is off)         */
+    int particles;  /* 0 simple, 1 rich burst counts          */
+    int smoke;      /* grey puffs hanging on explosions       */
+    int motionBlur; /* fading trails behind fast things       */
 } Graphics;
 extern Graphics gfx;
 
 /* pause-menu settings screen */
 extern int gfxPanelMode;   /* 0 hidden, 1 open */
 extern int gfxPanelSel;    /* row under the caret */
+extern int pauseMenuSel;   /* pause main menu: 0 resume, 1 graphics, 2 controls */
 
 extern Assets assets;
 
