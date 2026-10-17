@@ -174,14 +174,14 @@ void HudDraw(Camera2D cam)
     /* --- the squadron, below the hull panel --------------------------- */
     /* Taller rows with a clear gap under the heading: at the old 11px pitch
        the first name ran straight into the "WINGMEN" title. */
-    float wingH = 20.0f + 14.0f * (float)g_devWingCount;
+    float wingH = 25.0f + 14.0f * (float)g_devWingCount;
     /* the box hugs its widest row (icon + name + bar + pip + the special
        short name) with five pixels to spare - no dead wall of panel. */
     DrawPanel((Rectangle){ 6, 38, 138, wingH });
-    DrawTextPixShadow(assets.font, "WINGMEN", V2(10, 42), 1, COL_SHALLOW);
+    DrawTextPixShadow(assets.font, "WINGMEN", V2(10, 47), 1, COL_SHALLOW);
 
     for (int i = 0; i < g_devWingCount; i++)
-        DrawWingmanRow(i, 58.0f + (float)i * 14.0f);
+        DrawWingmanRow(i, 63.0f + (float)i * 14.0f);
 
     /* --- score, top right --------------------------------------------- */
     /* 7 digits on a 12px pitch span 88px; give the panel 8px of padding on
@@ -237,12 +237,11 @@ void HudDraw(Camera2D cam)
     float y = RENDER_H - 30.0f;
 
     /* Boost is a core control, so its meter is always on. */
-    /* the label mirrors the tank: calm green while there is fuel, a soft
-       warning red only when the pedal is nearly dead */
+    /* Boost keeps the same neutral tone as the meters beside it - only a
+       bone-dry tank greys it out, like an unusable special. */
     float boostFrac = p->boostFuel / PLAYER_BOOST_FUEL;
-    Color boostColor = (boostFrac <= 0.05f) ? (Color){ 232, 120, 112, 230 }
-                     : (boostFrac >= 0.99f) ? (Color){ 142, 226, 158, 210 }
-                                            : (Color){ 203, 222, 235, 200 };
+    Color boostColor = (boostFrac > 0.05f) ? COL_ALLY_UI
+                                           : (Color){ 96, 116, 134, 255 };
     DrawTextPixShadow(assets.font, boostLabel, V2(bx, y), 1, boostColor);
     DrawTimerBar((Rectangle){ bx, y + 13, bw, 5 }, p->boostFuel / PLAYER_BOOST_FUEL,
                  (Color){ 255, 236, 159, 230 });
