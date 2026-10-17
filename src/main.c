@@ -21,6 +21,57 @@ Game       g     = {0};
 InputState input = {0};
 int fpsCap = 0;  /* 0 = uncapped */
 
+Graphics gfx = { .quality = 1, .bloom = 1, .scanlines = 0, .vignette = 1, .particles = 1 };
+int gfxPanelMode = 0;   /* pause-menu graphics screen */
+int gfxPanelSel  = 0;
+
+#define GFX_SETTINGS_FILE "settings.cfg"
+
+/* Load quality settings from disk. Missing or junk values fall back to the
+   defaults above; the game never hard-fails over a settings file. */
+static void GfxSettingsLoad(void)
+{
+    char *text = LoadFileText(GFX_SETTINGS_FILE);
+    if (!text) return;
+
+    int v;
+    if (sscanf(text, "quality %d", &v) == 1 && v >= 0 && v <= 2) gfx.quality = v;
+    if (strstr(text, "bloom 1")            != NULL) gfx.bloom      = 1;
+    else if (strstr(text, "bloom 0")       != NULL) gfx.bloom      = 0;
+    if (strstr(text, "scanlines 1")        != NULL) gfx.scanlines  = 1;
+    else if (strstr(text, "scanlines 0")   != NULL) gfx.scanlines  = 0;
+    if (strstr(text, "vignette 1")         != NULL) gfx.vignette   = 1;
+    else if (strstr(text, "vignette 0")    != NULL) gfx.vignette   = 0;
+    if (strstr(text, "particles 1")        != NULL) gfx.particles  = 1;
+    else if (strstr(text, "particles 0")   != NULL) gfx.particles  = 0;
+    if (sscanf(text, "fpsCap %d", &v) == 1)
+        fpsCap = (v == 0 || v == 30 || v == 60 || v == 120 || v == 144) ? v : 0;
+
+    MemFree(text);
+}
+
+static void GfxSettingsSave(void)
+{
+    char text[256];
+    snprintf(text, sizeof text,
+             "quality %d\nbloom %d\nscanlines %d\nvignette %d\n"
+             "particles %d\nfpsCap %d\n",
+             gfx.quality, gfx.bloom, gfx.scanlines, gfx.vignette,
+             gfx.particles, fpsCap);
+    SaveFileText(GFX_SETTINGS_FILE, text);
+}
+
+/* a preset picks a sensible bundle so nobody has to flip five toggles */
+static void GfxApplyQuality(int q)
+{
+    gfx.quality = q;
+    switch (q) {
+        case 0:  gfx.bloom = 0; gfx.scanlines = 0; gfx.vignette = 0; gfx.particles = 0; break;
+        case 1:  gfx.bloom = 1; gfx.scanlines = 0; gfx.vignette = 1; gfx.particles = 1; break;
+        default: gfx.bloom = 1; gfx.scanlines = 1; gfx.vignette = 1; gfx.particles = 1; break;
+    }
+}
+
 /* --------------------------------------------------------------------------
  *  Presentation state
  * ----------------------------------------------------------------------- */
@@ -257,6 +308,8 @@ static bool RemapPanelKeys(void)
 /* Point the render target at a virtual screen of `w` x `h` pixels. The blit
    is a whole-number zoom, so the picture is only ever resized by re-creating
    the target - and only when the window has actually changed shape. */
+void RebuildBloomRT(int w, int h);   /* post FX: half-res bloom feed */
+
 static void SetVirtualScreen(int w, int h)
 {
     if (target.id != 0 && w == viewW && h == viewH) return;
@@ -265,6 +318,8 @@ static void SetVirtualScreen(int w, int h)
 
     target = LoadRenderTexture(w, h);
     SetTextureFilter(target.texture, TEXTURE_FILTER_POINT);
+
+    RebuildBloomRT(w, h);
 
     viewW  = w;
     viewH  = h;
@@ -741,6 +796,189 @@ static void UpdateTitleCamera(void)
                          floorf(g.player.pos.y + cosf(g.timer * 0.15f) * 90.0f));
 }
 
+/* --------------------------------------------------------------------------
+ *  Post effects
+ *
+ *  An optional bloom pass (the glow so bright areas bleed a little), plus two
+ *  cheap full-screen overlays: ever-other-scanline dimming and a vignette.
+ *  Everything is switchable from the pause menu's graphics panel and the
+ *  presets, and every stage fails soft: no shader, no bloom, game runs.
+ * ----------------------------------------------------------------------- */
+static Shader       bloomShader = { 0 };
+static RenderTexture bloomRT    = { 0 };
+static Texture2D    scanTex;
+static Texture2D    vignTex;
+static int          uTexel     = -1;
+static int          uStrength  = -1;
+static bool         postLoaded = false;
+static bool         bloomOK    = false;
+
+#if defined(__EMSCRIPTEN__)
+static const char *kBloomFs =
+"#version 100\n"
+"precision mediump float;\n"
+"varying vec2 fragTexCoord;\n"
+"uniform sampler2D texture0;\n"
+"uniform vec2 texelSize;\n"
+"uniform float strength;\n"
+"#define SAMPLE(tex,uv) texture2D(tex, uv)\n"
+"void main() {\n"
+"    vec3  c   = SAMPLE(texture0, fragTexCoord).rgb;\n"
+"    float lum = dot(c, vec3(0.299, 0.587, 0.114));\n"
+"    vec2  r   = texelSize * 3.0;\n"
+"    vec3  sum = vec3(0.0);\n"
+"    for (int i = 0; i < 8; i++) {\n"
+"        float ang = 3.14159265 * 0.25 * float(i);\n"
+"        vec2  off = vec2(cos(ang), sin(ang)) * r;\n"
+"        vec3  s   = SAMPLE(texture0, fragTexCoord + off).rgb;\n"
+"        float b   = dot(s, vec3(0.299, 0.587, 0.114)) - 0.55;\n"
+"        sum      += s * max(b, 0.0);\n"
+"    }\n"
+"    gl_FragColor = vec4(sum * strength * 0.25, 1.0);\n"
+"}\n";
+#else
+static const char *kBloomFs =
+"#version 330\n"
+"in vec2 fragTexCoord;\n"
+"uniform sampler2D texture0;\n"
+"uniform vec2 texelSize;\n"
+"uniform float strength;\n"
+"#define SAMPLE(tex,uv) texture(tex, uv)\n"
+"out vec4 finalColor;\n"
+"void main() {\n"
+"    vec3  c   = SAMPLE(texture0, fragTexCoord).rgb;\n"
+"    float lum = dot(c, vec3(0.299, 0.587, 0.114));\n"
+"    vec2  r   = texelSize * 3.0;\n"
+"    vec3  sum = vec3(0.0);\n"
+"    for (int i = 0; i < 8; i++) {\n"
+"        float ang = 3.14159265 * 0.25 * float(i);\n"
+"        vec2  off = vec2(cos(ang), sin(ang)) * r;\n"
+"        vec3  s   = SAMPLE(texture0, fragTexCoord + off).rgb;\n"
+"        float b   = dot(s, vec3(0.299, 0.587, 0.114)) - 0.55;\n"
+"        sum      += s * max(b, 0.0);\n"
+"    }\n"
+"    finalColor = vec4(sum * strength * 0.25, 1.0);\n"
+"}\n";
+#endif
+
+void RebuildBloomRT(int w, int h)
+{
+    if (!postLoaded) return;
+    if (bloomRT.id != 0) UnloadRenderTexture(bloomRT);
+    bloomRT = LoadRenderTexture((w + 1) / 2, (h + 1) / 2);
+    SetTextureFilter(bloomRT.texture, TEXTURE_FILTER_BILINEAR);
+}
+
+/* overlay art built once: a scanline mask and a soft vignette at the game's
+   own virtual resolution - they stretch with the blit, so they scale clean */
+static void BuildOverlayTextures(void)
+{
+    Image img = GenImageColor(BASE_W, BASE_H, BLANK);
+    Color dark = { 4, 10, 16, 40 };
+    for (int y = 1; y < BASE_H; y += 2)
+        for (int x = 0; x < BASE_W; x++)
+            ImageDrawPixel(&img, x, y, dark);
+    scanTex = LoadTextureFromImage(img);
+    SetTextureFilter(scanTex, TEXTURE_FILTER_POINT);
+    UnloadImage(img);
+
+    img = GenImageColor(BASE_W, BASE_H, BLANK);
+    for (int y = 0; y < BASE_H; y++) {
+        for (int x = 0; x < BASE_W; x++) {
+            float dx = (x / (BASE_W - 1.0f)) * 2.0f - 1.0f;
+            float dy = (y / (BASE_H - 1.0f)) * 2.0f - 1.0f;
+            float d  = sqrtf(dx * dx + dy * dy) * 0.5f;         /* 0...~1.4 */
+            float t  = d - 0.62f;
+            if (t <= 0.0f) continue;
+            if (t > 1.0f) t = 1.0f;
+            ImageDrawPixel(&img, x, y, (Color){ 2, 6, 12,
+                                (unsigned char)(150.0f * t * t) });
+        }
+    }
+    vignTex = LoadTextureFromImage(img);
+    SetTextureFilter(vignTex, TEXTURE_FILTER_BILINEAR);
+    UnloadImage(img);
+}
+
+static void PostFxInit(void)
+{
+    if (postLoaded) return;
+    bloomShader = LoadShaderFromMemory(NULL, kBloomFs);
+    uTexel    = GetShaderLocation(bloomShader, "texelSize");
+    uStrength = GetShaderLocation(bloomShader, "strength");
+
+    BuildOverlayTextures();
+    postLoaded = true;
+
+    /* a driver that rejects our GLSL must never take the game down with it */
+    if (bloomShader.id == 0) bloomOK = false;
+    else {
+        float zero[2] = { 0.0f, 0.0f };
+        SetShaderValue(bloomShader, uTexel, zero, SHADER_UNIFORM_VEC2);
+        float one = 1.0f;
+        SetShaderValue(bloomShader, uStrength, &one, SHADER_UNIFORM_FLOAT);
+        bloomOK = true;
+    }
+
+    RebuildBloomRT(viewW, viewH);   /* half window res: softer blur, cheaper */
+}
+
+static void PostFxUnload(void)
+{
+    if (!postLoaded) return;
+    UnloadShader(bloomShader);
+    if (bloomRT.id != 0) UnloadRenderTexture(bloomRT);
+    UnloadTexture(scanTex);
+    UnloadTexture(vignTex);
+    postLoaded = false;
+}
+
+/* the bloom feed: bright, blurred copy of the finished scene */
+static void PostFxRender(void)
+{
+    if (!postLoaded || !bloomOK || !gfx.bloom || bloomRT.id == 0) return;
+
+    float texel[2]     = { 1.0f / (float)viewW, 1.0f / (float)viewH };
+    float strength     = 1.15f;
+
+    BeginTextureMode(bloomRT);
+    ClearBackground(BLANK);
+    SetShaderValue(bloomShader, uTexel, texel, SHADER_UNIFORM_VEC2);
+    SetShaderValue(bloomShader, uStrength, &strength, SHADER_UNIFORM_FLOAT);
+    BeginShaderMode(bloomShader);
+    DrawTexturePro(target.texture,
+                   (Rectangle){ 0.0f, 0.0f, (float)viewW, -(float)viewH },
+                   (Rectangle){ 0.0f, 0.0f,
+                                (float)bloomRT.texture.width,
+                                (float)bloomRT.texture.height },
+                   V2(0, 0), 0.0f, WHITE);
+    EndShaderMode();
+    EndTextureMode();
+}
+
+/* stacked on the window blit so the overlays follow the picture, not the UI */
+static void PostFxPresent(const Rectangle *dst)
+{
+    if (!postLoaded) return;
+
+    if (bloomOK && gfx.bloom && bloomRT.id != 0) {
+        BeginBlendMode(BLEND_ADDITIVE);
+        DrawTexturePro(bloomRT.texture,
+                       (Rectangle){ 0.0f, 0.0f, (float)bloomRT.texture.width,
+                                    -(float)bloomRT.texture.height },
+                       *dst, V2(0, 0), 0.0f, WHITE);
+        EndBlendMode();
+    }
+    if (gfx.scanlines) {
+        Rectangle src = { 0.0f, 0.0f, (float)BASE_W, (float)BASE_H };
+        DrawTexturePro(scanTex, src, *dst, V2(0, 0), 0.0f, WHITE);
+    }
+    if (gfx.vignette) {
+        Rectangle src = { 0.0f, 0.0f, (float)BASE_W, (float)BASE_H };
+        DrawTexturePro(vignTex, src, *dst, V2(0, 0), 0.0f, WHITE);
+    }
+}
+
 static void DrawFrame(void)
 {
     /* The virtual screen is re-fitted before anything is drawn into it, so a
@@ -774,6 +1012,8 @@ static void DrawFrame(void)
 
     EndTextureMode();
 
+    PostFxRender();
+
     /* blit the virtual screen, filling the window exactly */
     BeginDrawing();
     ClearBackground((Color){ 8, 12, 18, 255 });
@@ -782,6 +1022,8 @@ static void DrawFrame(void)
     Rectangle dst = { viewOffset.x, viewOffset.y,
                       RENDER_W * viewScale, RENDER_H * viewScale };
     DrawTexturePro(target.texture, src, dst, V2(0, 0), 0.0f, WHITE);
+
+    PostFxPresent(&dst);
 
     EndDrawing();
 }
@@ -928,6 +1170,47 @@ static void HandleGlobalKeys(void)
                so Escape means "close the panel", not "resume". */
             if (remapActive) { RemapPanelKeys(); break; }
 
+            /* ...and so does the graphics panel. */
+            if (gfxPanelMode) {
+                enum { GFX_ROWS = 6 };
+                if (IsKeyPressed(KEY_G) || IsKeyPressed(KEY_ESCAPE)) {
+                    gfxPanelMode = 0;
+                    break;
+                }
+                if (IsKeyPressed(KEY_W) || IsKeyPressed(KEY_UP))
+                    gfxPanelSel = (gfxPanelSel + GFX_ROWS - 1) % GFX_ROWS;
+                if (IsKeyPressed(KEY_S) || IsKeyPressed(KEY_DOWN))
+                    gfxPanelSel = (gfxPanelSel + 1) % GFX_ROWS;
+
+                int dir = 0;
+                if (IsKeyPressed(KEY_A) || IsKeyPressed(KEY_LEFT))  dir = -1;
+                if (IsKeyPressed(KEY_D) || IsKeyPressed(KEY_RIGHT)) dir = 1;
+                if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE) ||
+                    IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_FACE_DOWN)) dir = 1;
+
+                if (dir != 0) {
+                    switch (gfxPanelSel) {
+                        case 0: GfxApplyQuality((gfx.quality + dir + 3) % 3); break;
+                        case 1: gfx.bloom      = !gfx.bloom;     break;
+                        case 2: gfx.scanlines  = !gfx.scanlines; break;
+                        case 3: gfx.vignette   = !gfx.vignette;  break;
+                        case 4: gfx.particles  = !gfx.particles; break;
+                        case 5: {
+                            static const int caps[] = { 0, 30, 60, 120, 144 };
+                            int idx = 0;
+                            for (int i = 0; i < 5; i++)
+                                if (caps[i] == fpsCap) idx = i;
+                            fpsCap = caps[(idx + dir + 5) % 5];
+                            SetTargetFPS((fpsCap <= 0) ? 1000 : fpsCap);
+                            break;
+                        }
+                    }
+                    GfxSettingsSave();
+                }
+                break;
+            }
+
+            if (IsKeyPressed(KEY_G)) { gfxPanelMode = 1; gfxPanelSel = 0; break; }
             if (IsKeyPressed(KEY_C)) { remapActive = true; remapArmed = false; break; }
 
 
@@ -1046,7 +1329,10 @@ int main(int argc, char **argv)
     InitWindow(BASE_W * 3, BASE_H * 3, "Pixel Squadron - raylib twin-stick shooter");
     InitAudioDevice();
 #else
-    SetConfigFlags(FLAG_VSYNC_HINT | FLAG_MSAA_4X_HINT);
+    /* No VSYNC hint: with it on the swap blocks and "FREE" never beats the
+       monitor's refresh by a pixel. The FPS-cap system regulates the loop
+       itself, so the driver is left alone. */
+    SetConfigFlags(FLAG_MSAA_4X_HINT);
     InitWindow(BASE_W * 3, BASE_H * 3, "Pixel Squadron - raylib twin-stick shooter");
     InitAudioDevice();
 
@@ -1058,6 +1344,7 @@ int main(int argc, char **argv)
 #endif
 
     SetExitKey(KEY_NULL);          /* we handle Escape ourselves */
+    GfxSettingsLoad();
     SetTargetFPS((fpsCap <= 0) ? 1000 : fpsCap);  /* 0 = uncapped */
     SetRandomSeed(seed ? seed : (unsigned)time(NULL));
     ArenaForceBiome(forceBiome);   /* no-op unless --biome was passed */
@@ -1065,6 +1352,7 @@ int main(int argc, char **argv)
     LoadHighScore();
     BindsLoad();
     AssetsLoad();
+    PostFxInit();      /* bloom pass + CRT overlays; failures fall back nice */
 
     camera = (Camera2D){
         .offset   = V2(BASE_W * 0.5f, BASE_H * 0.5f),
@@ -1257,7 +1545,9 @@ int main(int argc, char **argv)
         }
     }
 
+    PostFxUnload();
     UnloadRenderTexture(target);
+    GfxSettingsSave();
     AssetsUnload();
     CloseAudioDevice();
     CloseWindow();

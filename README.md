@@ -67,6 +67,13 @@ your three wingmen, who chat, bicker and (usually) have your back.
 - **Critical hits** - one shot in five lands hard for 2.5x damage and flashes
   `CRIT` over the target.
 - **Boost** - hold Shift to spend a rocket plume's worth of extra speed.
+- **Graphics settings** - pause menu, `G`: pick a quality preset (LOW /
+  MEDIUM / HIGH) or flip individual effects. **Bloom** makes bright shots and
+  explosions glow softly, and HIGH adds CRT-style **scanlines** and a
+  **vignette**; particle density is its own toggle, so weaker machines can
+  trade confetti for speed. The fps cap (FREE/30/60/120/144) lives on the
+  same panel, and everything-including the pad bindings-saves to
+  `settings.cfg` the moment you touch it.
 - **Wave-based survival** with a score, three weapon levels, rapid fire and
   shields.
 - **Fills the screen** - the game renders into a pixel-perfect virtual screen
@@ -90,6 +97,7 @@ your three wingmen, who chat, bicker and (usually) have your back.
 | Chat bubbles toggle | `H` | `Back` |
 | Cap the fps | `F` (free/30/60/120/144) | - |
 | Rebind the pad | `C` (from the pause menu) | - |
+| Graphics settings | `G` (from the pause menu) | - |
 | Pause | `P` / `Esc` | `Start` |
 | Fullscreen | `F11` | - |
 | Mute | `M` | - |

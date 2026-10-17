@@ -396,7 +396,10 @@ void HudDraw(Camera2D cam)
        sits on the pointer; on the pad it rides out along the aim vector, so
        there is still something on screen saying where the guns point - and
        it is drawn in the colour of whatever the guns are loaded with. */
-    if (g.player.alive) {
+    /* With auto-shoot the guns look after themselves, so the manual sight
+       would only sit there pretending the player is still aiming - hide it
+       and let the badge say the mode is on instead. */
+    if (g.player.alive && !input.autoAim) {
         Vector2 aimAt = input.reticle;
 
         if (input.usingGamepad) {
@@ -606,6 +609,89 @@ void HudDrawGameOver(void)
 /* --------------------------------------------------------------------------
  *  Pause
  * ----------------------------------------------------------------------- */
+/* --------------------------------------------------------------------------
+ *  Graphics settings panel: one row per knob, adusted with A/D or the
+ *  arrows, saved to settings.cfg the moment anything moves.
+ * ----------------------------------------------------------------------- */
+void HudDrawGraphics(int centre)
+{
+    static const struct SettingsRow {
+        const char *label;
+        const char *options[3];
+    } kRows[] = {
+        { "QUALITY",   { "LOW", "MEDIUM", "HIGH" } },
+        { "BLOOM",     { "OFF", "ON", NULL } },
+        { "SCANLINES", { "OFF", "ON", NULL } },
+        { "VIGNETTE",  { "OFF", "ON", NULL } },
+        { "PARTICLES", { "SIMPLE", "RICH", NULL } },
+    };
+    const int kRowsCount = (int)(sizeof kRows / sizeof kRows[0]);
+
+    DrawTextCentered("GRAPHICS", centre - 76, 2, assets.font, COL_FOAM);
+    DrawTextCentered("A/D OR ARROW KEYS - CHANGE", centre - 50, 1,
+                     assets.font, (Color){ 126, 226, 250, 170 });
+
+    float x = floorf((float)RENDER_W * 0.5f) - 88.0f;
+    float y = (float)centre - 28.0f;
+
+    char line[64];
+
+    for (int i = 0; i < kRowsCount; i++) {
+        bool sel = (i == gfxPanelSel);
+
+        /* the value each row shows right now */
+        const char *value;
+        switch (i) {
+            case 0: value = kRows[0].options[gfx.quality];   break;
+            case 1: value = kRows[1].options[gfx.bloom];     break;
+            case 2: value = kRows[2].options[gfx.scanlines]; break;
+            case 3: value = kRows[3].options[gfx.vignette];  break;
+            case 4: value = kRows[4].options[gfx.particles]; break;
+        }
+
+        if (sel) {
+            DrawRectangle((int)x - 10, (int)y - 4, (int)RENDER_W - (int)x * 2 + 20, 15,
+                          (Color){ 255, 186, 92, 60 });
+            DrawRectangle((int)x - 10, (int)y - 4, 2, 15,
+                          (Color){ 255, 236, 159, 255 });
+        }
+
+        snprintf(line, sizeof line, "%-9s %s", kRows[i].label, value);
+        DrawTextPix(assets.font, line, V2(x, y), 1,
+                    sel ? (Color){ 255, 236, 159, 255 } : COL_SHALLOW);
+
+        y += 16.0f;
+    }
+
+    /* fps cap goes here too, so all of the "how fast does it run" stuff
+       lives on one screen */
+    {
+        bool sel = (5 == gfxPanelSel);
+        char cap[12];
+        if (fpsCap > 0) { snprintf(cap, sizeof cap, "%d", fpsCap); }
+        else            { snprintf(cap, sizeof cap, "FREE"); }
+
+        if (sel) {
+            DrawRectangle((int)x - 10, (int)y - 4, (int)RENDER_W - (int)x * 2 + 20, 15,
+                          (Color){ 255, 186, 92, 60 });
+            DrawRectangle((int)x - 10, (int)y - 4, 2, 15,
+                          (Color){ 255, 236, 159, 255 });
+        }
+        snprintf(line, sizeof line, "%-9s %s", "FPS CAP", cap);
+        DrawTextPix(assets.font, line, V2(x, y), 1,
+                    sel ? (Color){ 255, 236, 159, 255 } : COL_SHALLOW);
+        y += 16.0f;
+    }
+
+    float blink = 0.55f + 0.45f * sinf(g.timer * 4.0f);
+    Color prompt = COL_FOAM;
+    prompt.a = (unsigned char)(120.0f + 135.0f * blink);
+    DrawTextCentered("G / ESC  -  BACK TO PAUSE  (SAVED AUTOMATICALLY)",
+                     centre + 76, 1, assets.font, prompt);
+}
+
+void HudDrawGraphics(int centre);
+
 void HudDrawPause(void)
 {
     DrawRectangle(0, 0, RENDER_W, RENDER_H, (Color){ 12, 20, 28, 170 });
@@ -657,6 +743,8 @@ void HudDrawPause(void)
         return;
     }
 
+    if (gfxPanelMode) { HudDrawGraphics(centre); return; }
+
     DrawTextCentered("PAUSED", centre - 34, 2, assets.font, COL_FOAM);
     DrawTextCentered("P / ESC / START  -  RESUME", centre - 2, 1, assets.font, COL_SHALLOW);
     DrawTextCentered("WASD / LEFT STICK - MOVE    MOUSE / RIGHT STICK - AIM",
@@ -665,8 +753,10 @@ void HudDrawPause(void)
                      centre + 28, 1, assets.font, (Color){ 126, 226, 250, 160 });
     DrawTextCentered("Q/X RECALL   E/Y SPECIAL   TAB OR 1-8 LOAD ONE",
                      centre + 42, 1, assets.font, (Color){ 126, 226, 250, 160 });
+    DrawTextCentered("G - GRAPHICS SETTINGS  (BLOOM, QUALITY, FPS CAP)",
+                     centre + 54, 1, assets.font, (Color){ 255, 200, 120, 170 });
     DrawTextCentered("V - AUTO-SHOOT     H - CHAT POPUPS     C - PAD CONTROLS",
-                     centre + 56, 1, assets.font, (Color){ 126, 226, 250, 160 });
+                     centre + 68, 1, assets.font, (Color){ 126, 226, 250, 160 });
     DrawTextCentered("F - FPS CAP  FREE/30/60/120/144  (SHOWN IN COUNTER)",
-                      centre + 70, 1, assets.font, (Color){ 126, 226, 250, 120 });
+                      centre + 80, 1, assets.font, (Color){ 126, 226, 250, 120 });
 }

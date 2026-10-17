@@ -25,3 +25,5 @@ probe_*.png
 .idea/
 Thumbs.db
 desktop.ini
+
+settings.cfg

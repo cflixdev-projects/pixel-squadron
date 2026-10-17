@@ -160,6 +160,9 @@ void SpawnBurst(Vector2 pos, float scale)
 void SpawnBurstParticles(Vector2 pos, float power, Color tint)
 {
     int count = (int)(6.0f + power * 10.0f);
+    /* "SIMPLE" quality keeps the same shapes but adds fewer of them, so
+       weak GPUs stop paying for confetti */
+    if (!gfx.particles) count = 1 + count / 3;
 
     for (int i = 0; i < count; i++) {
         float ang = (float)GetRandomValue(0, 359) * DEG2RAD;
@@ -1729,6 +1732,9 @@ void AlliesRally(void)
    upgrade, plus the extra bite from a weapon crate if they are flying hot. */
 static float AllyGunMul(const Ally *a)
 {
+    /* the player has no ally powerup timer - their crates are handled on
+       their own pickup path - so they take the base multiplier */
+    if (a == NULL) return AllyDamageMul();
     return AllyDamageMul() * ((a->powerTimer > 0.0f) ? 1.5f : 1.0f);
 }
 

@@ -606,6 +606,22 @@ typedef struct {
 } Assets;
 
 extern int fpsCap;
+
+/* Renderer quality knobs, all reachable from the pause menu's graphics
+   panel and persisted across sessions. */
+typedef struct {
+    int quality;   /* preset: 0 low, 1 medium, 2 high */
+    int bloom;     /* glowing post-process pass      */
+    int scanlines; /* CRT overlay                    */
+    int vignette;  /* dark corners                   */
+    int particles; /* 0 simple, 1 rich burst counts  */
+} Graphics;
+extern Graphics gfx;
+
+/* pause-menu settings screen */
+extern int gfxPanelMode;   /* 0 hidden, 1 open */
+extern int gfxPanelSel;    /* row under the caret */
+
 extern Assets assets;
 
 void AssetsLoad(void);
