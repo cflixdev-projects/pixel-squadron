@@ -59,7 +59,7 @@ int fpsCap = 0;  /* 0 = uncapped */
 
 Graphics gfx = { .quality = 1, .bloomLevel = 2, .bloom = 1, .crt = 0,
                   .vignette = 1, .particles = 1, .smoke = 1,
-                  .motionBlur = 0, .vsync = 0, .msaa = 1 };
+                  .motionBlur = 0, .vsync = 0, .msaa = 1, .display = 1 };
 bool    g_autoTargetOn = false;   /* auto-shoot: a target is being tracked */
 Vector2 g_autoTarget    = { 0, 0 };
 int gfxPanelMode = 0;   /* pause-menu graphics screen */
@@ -118,8 +118,15 @@ static void GfxSettingsLoad(void)
     else if (strstr(text, "smoke 0")       != NULL) gfx.smoke       = 0;
     if (strstr(text, "motionBlur 1")       != NULL) gfx.motionBlur  = 1;
     else if (strstr(text, "motionBlur 0")  != NULL) gfx.motionBlur  = 0;
-    if (sscanf(text, "fpsCap %d", &v) == 1)
+    /* sscanf stops at the first mismatch, so keys that are not first in the
+       blob are fished out with strstr before parsing. */
+    const char *at;
+    if ((at = strstr(text, "fpsCap")) != NULL &&
+        sscanf(at, "fpsCap %d", &v) == 1)
         fpsCap = (v == 0 || v == 30 || v == 60 || v == 120 || v == 144) ? v : 0;
+    if ((at = strstr(text, "display")) != NULL &&
+        sscanf(at, "display %d", &v) == 1 && (v == 0 || v == 1))
+        gfx.display = v;
 
     MemFree(text);
 }
@@ -130,10 +137,10 @@ static void GfxSettingsSave(void)
     snprintf(text, sizeof text,
              "quality %d\nbloomLevel %d\nbloom %d\ncrt %d\nvignette %d\n"
              "particles %d\nsmoke %d\nmotionBlur %d\nvsync %d\nmsaa %d\n"
-             "fpsCap %d\n",
+             "fpsCap %d\ndisplay %d\n",
              gfx.quality, gfx.bloomLevel, gfx.bloom, gfx.crt, gfx.vignette,
              gfx.particles, gfx.smoke, gfx.motionBlur, gfx.vsync, gfx.msaa,
-             fpsCap);
+             fpsCap, gfx.display);
     SaveFileText(GFX_SETTINGS_FILE, text);
 }
 
@@ -1471,7 +1478,7 @@ static void HandleGlobalKeys(void)
 
             /* ...and so does the graphics panel. */
             if (gfxPanelMode) {
-                enum { GFX_ROWS = 10 };
+                enum { GFX_ROWS = 11 };
                 if (IsKeyPressed(KEY_G) || IsKeyPressed(KEY_ESCAPE) ||
                     IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT)) {
                     gfxPanelMode = 0;
@@ -1524,6 +1531,23 @@ static void HandleGlobalKeys(void)
                             break;
                         }
                         case 9: {
+                            /* raw window plumbing: borderless-fullscreen vs
+                               windowed. The browser drives this itself, so
+                               on the web the row is display-only. */
+#if defined(__EMSCRIPTEN__)
+                            break;
+#else
+                            gfx.display = (gfx.display == 1) ? 0 : 1;
+                            if (gfx.display == 1) {
+                                SetFullscreen(true);
+                            } else {
+                                if (fullscreenOn) SetFullscreen(false);
+                                FitWindowToIntegerScale(START_CENTER);
+                            }
+#endif
+                            break;
+                        }
+                        case 10: {
                             static const int caps[] = { 0, 30, 60, 120, 144 };
                             int idx = 0;
                             for (int i = 0; i < 5; i++)
@@ -1623,6 +1647,9 @@ int main(int argc, char **argv)
     bool devTest = false;     /* dev: scripted cheat console pass */
     bool devTestDone = false;
 #if !defined(__EMSCRIPTEN__)
+    bool displayForced = false;   /* --windowed / --fullscreen said so */
+#endif
+#if !defined(__EMSCRIPTEN__)
     int startFlags = START_CENTER | START_FULLSCREEN;   /* play big by default */
 #endif
     for (int i = 1; i < argc; i++) {
@@ -1635,8 +1662,10 @@ int main(int argc, char **argv)
 #if !defined(__EMSCRIPTEN__)
         } else if (strcmp(argv[i], "--fullscreen") == 0) {
             startFlags |= START_FULLSCREEN;
+            displayForced = true;
         } else if (strcmp(argv[i], "--windowed") == 0) {
             startFlags &= ~START_FULLSCREEN;
+            displayForced = true;
 #endif
         } else if (strcmp(argv[i], "--endcard") == 0) {
             endCard = true;      /* dev: screenshot the end-of-run report */
@@ -1704,6 +1733,10 @@ int main(int argc, char **argv)
 
     /* A headless demo should not hijack the desktop. */
     if (demoSeconds > 0.0f || endCard) startFlags &= ~START_FULLSCREEN;
+
+    /* The DISPLAY row from settings.cfg decides how the window boots -
+       unless the command line was explicit about it. */
+    if (gfx.display == 0 && !displayForced) startFlags &= ~START_FULLSCREEN;
 
     FitWindowToIntegerScale(startFlags);
     if (startFlags & START_FULLSCREEN) SetFullscreen(true);

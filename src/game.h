@@ -209,6 +209,9 @@ extern const Color kRockRamp[BIOME_COUNT][3];
 #define FIELD_SHOVE     250.0f  /* speed enemies are pushed out at         */
 #define FIELD_HEAL      9.0f    /* hull per second to everyone inside      */
 #define FIELD_COOLDOWN  16.0f
+#define FIELD_MAX       4       /* several domes can be up at once, and the
+                                   ones whose shells touch stack their     */
+                                   /* push, burn and repair on top of each other */
 
 /* Holding Shift spends boost fuel for a short burst of extra top speed. */
 #define PLAYER_BOOST_FUEL 1.6f   /* seconds of boost available          */
@@ -417,7 +420,8 @@ typedef struct {
    to breathe, look at the board and take the fight back up on its own terms. */
 typedef struct {
     bool    alive;
-    bool    onPlayer; /* the player cast it, so it rides with the player   */
+    int     caster;   /* who the dome belongs to: -1 the player, otherwise
+                         that wingman's slot - it rides along with them  */
     Vector2 pos;      /* follows the caster while it holds */
     float   life;     /* seconds left                      */
     float   radius;
@@ -562,7 +566,7 @@ typedef struct {
     int   allyKills[MAX_ALLIES];  /* wing kills, per slot - the wing's rank */
     int   allyLevel;     /* how many times the wing has been rearmed    */
     float levelUpFlash;  /* >0 while the "WINGMEN LEVEL UP" banner runs */
-    AegisField field;    /* JUNO's dome, when it is up                  */
+    AegisField field[FIELD_MAX];   /* every dome in the sky right now      */
 
     /* feel */
     float shake;
@@ -631,6 +635,7 @@ typedef struct {
     int motionBlur; /* fading trails behind fast things       */
     int vsync;      /* swap-block each monitor frame (desktop) */
     int msaa;       /* GPU anti-aliasing; applied next launch */
+    int display;    /* 0 windowed, 1 borderless-fullscreen (desktop) */
 } Graphics;
 extern Graphics gfx;
 

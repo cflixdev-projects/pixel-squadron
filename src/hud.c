@@ -700,6 +700,7 @@ void HudDrawGraphics(int centre)
         { "MOTION BLUR",{ "OFF", "ON", NULL, NULL } },
         { "VSYNC",      { "OFF", "ON", NULL, NULL } },
         { "AA (MSAA)",  { "OFF", "ON", NULL, NULL } },
+        { "DISPLAY",    { "WINDOWED", "FULLSCREEN", NULL, NULL } },
     };
     const int kRowsCount = (int)(sizeof kRows / sizeof kRows[0]);
     const int kTotal = kRowsCount + 1;   /* + fps cap */
@@ -733,9 +734,11 @@ void HudDrawGraphics(int centre)
 #if defined(__EMSCRIPTEN__)
                 case 7: value = kWebNA;                             break;
                 case 8: value = kWebNA;                             break;
+                case 9: value = kWebNA;                             break;
 #else
                 case 7: value = kRows[7].options[gfx.vsync];        break;
                 case 8: value = kRows[8].options[gfx.msaa];         break;
+                case 9: value = kRows[9].options[gfx.display];      break;
 #endif
                 default: value = ""; break;
             }

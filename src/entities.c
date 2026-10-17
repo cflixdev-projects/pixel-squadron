@@ -414,7 +414,7 @@ void EntitiesReset(void)
     g.crits      = 0;
     g.allyLevel  = 0;
     g.levelUpFlash = 0.0f;
-    g.field      = (AegisField){ 0 };
+    for (int i = 0; i < FIELD_MAX; i++) g.field[i] = (AegisField){ 0 };
     for (int i = 0; i < MAX_ALLIES; i++) g.allyKills[i] = 0;
 
     /* a fresh run starts cheat-clean: no god, normal speed */
@@ -591,13 +591,13 @@ static int RoleSpecialCount(int role)
     return n;
 }
 
-/* After a special fires, the pilot reloads something else at random. */
+/* After a special fires, the bag cycles forward one slot: the pilot's own
+   signature move comes back after every other trick has had its turn - so
+   VEX orbits BROADSIDE, JUNO alternates AEGIS and TRIAGE, and nobody can
+   spam one favourite forever. */
 static void RoleNextSpecial(Ally *a)
 {
-    int opts[3], n = 0;
-    for (int i = 0; i < 3; i++)
-        if (kRoleSpecials[a->role][i] >= 0 && i != a->specialSel) opts[n++] = i;
-    if (n > 0) a->specialSel = opts[GetRandomValue(0, n - 1)];
+    a->specialSel = (a->specialSel + 1) % RoleSpecialCount(a->role);
 }
 
 static float AllyGunMul(const Ally *a);
@@ -829,47 +829,58 @@ void PlayerSpecial(void)
 
 
 /* --------------------------------------------------------------------------
- *  JUNO's dome
+*  JUNO's dome (and now every other dome, too)
  *
  *  A bubble of quiet in the middle of the fight: enemies get shoved out of it,
  *  their fire comes apart on the shell, everyone standing inside gets patched
- *  up, and it pays out a weapon crate on its way through. It rides with JUNO,
- *  so wherever the squadron goes the bubble covers them.
+ *  up, and it pays out a weapon crate on its way through. It rides with whoever
+ *  cast it, so wherever the squadron goes the bubble covers them.
+ *
+ *  Several can be up at once - the player's and JUNO's can overlap without one
+ *  erasing the other, and any two whose shells touch lend each other their
+ *  power: a doubled field shoves, burns and repairs twice as hard.
  * ----------------------------------------------------------------------- */
 void FieldCast(Ally *caster)
 {
-    g.field = (AegisField){
+    /* a free bubble, or failing that the oldest one gets cannibalised */
+    AegisField *f = &g.field[0];
+    for (int i = 0; i < FIELD_MAX; i++)
+        if (!g.field[i].alive) { f = &g.field[i]; break; }
+    for (int i = 0; i < FIELD_MAX; i++)
+        if (g.field[i].alive && g.field[i].life < f->life) f = &g.field[i];
+
+    *f = (AegisField){
         .alive    = true,
-        .onPlayer = (caster == NULL),
+        .caster   = caster ? caster->slot : -1,
         .pos      = caster ? caster->pos : g.player.pos,
-        .life    = FIELD_LIFE,
-        .radius  = FIELD_RADIUS,
-        .pulse   = 0.0f,
-        .dropped = false,
+        .life     = FIELD_LIFE,
+        .radius   = FIELD_RADIUS,
+        .pulse    = 0.0f,
+        .dropped  = false,
     };
 
-    SpawnBurst(g.field.pos, 2.2f);
-    SpawnBurstParticles(g.field.pos, 1.6f, COL_HEAL);
+    SpawnBurst(f->pos, 2.2f);
+    SpawnBurstParticles(f->pos, 1.6f, COL_HEAL);
     PlaySfx(assets.shield, 0.5f, 0.9f);
 }
 
 void FieldUpdate(float dt)
 {
-    AegisField *f = &g.field;
-    if (!f->alive) return;
+    for (int slot = 0; slot < FIELD_MAX; slot++) {
+    AegisField *f = &g.field[slot];
+    if (!f->alive) continue;
 
     f->life  -= dt;
     f->pulse += dt;
 
-    /* Whoever cast the dome, the dome stays with them: the player's field
-       never jumps onto JUNO, and JUNO's own still rides with her. */
-    if (f->onPlayer) {
+    /* Whoever cast the dome, the dome stays with them: tracked by slot, so
+       two JUNOs never fight over one bubble and the player's field never
+       jumps onto a wingman. */
+    if (f->caster >= 0) {
+        Ally *a = &g.allies[f->caster];
+        if (a->alive) f->pos = a->pos;
+    } else if (g.player.alive) {
         f->pos = g.player.pos;
-    } else {
-        for (int i = 0; i < MAX_ALLIES; i++) {
-            Ally *a = &g.allies[i];
-            if (a->alive && a->role == ALLY_JUNO) { f->pos = a->pos; break; }
-        }
     }
 
     if (f->life <= 0.0f) {
@@ -878,7 +889,20 @@ void FieldUpdate(float dt)
         return;
     }
 
-    float r2 = f->radius * f->radius;
+    /* Doubling up: every other dome whose shell touches this one lends it
+       its strength - 2x push, 2x burn, 2x repair. Crews learn to park two
+       fields on top of the same patch of sky. */
+    int stack = 1;
+    for (int j = 0; j < FIELD_MAX; j++) {
+        if (j == slot || !g.field[j].alive) continue;
+        float touch = f->radius + g.field[j].radius;
+        if (Dist2(f->pos, g.field[j].pos) <= touch * touch) stack++;
+    }
+
+    float r2    = f->radius * f->radius;
+    float shove = FIELD_SHOVE * (float)stack * dt * 8.0f;
+    float burn  = 13.0f * (float)stack * dt;
+    float mend  = FIELD_HEAL * (float)stack * dt;
 
     for (int i = 0; i < MAX_ENEMIES; i++) {
         Enemy *e = &g.enemies[i];
@@ -891,8 +915,8 @@ void FieldUpdate(float dt)
 
         /* shove them out along the radius and keep shoving while they are in,
            so nothing can sit inside the bubble and shoot */
-        e->vel = V2Add(e->vel, V2Scale(n, FIELD_SHOVE * dt * 8.0f));
-        DamageEnemy(e, 13.0f * dt);
+        e->vel = V2Add(e->vel, V2Scale(n, shove));
+        DamageEnemy(e, burn);
     }
 
     for (int i = 0; i < MAX_BULLETS; i++) {
@@ -905,12 +929,12 @@ void FieldUpdate(float dt)
     }
 
     if (g.player.alive && Dist2(g.player.pos, f->pos) <= r2) {
-        g.player.hp = fminf(PLAYER_MAX_HP, g.player.hp + FIELD_HEAL * dt);
+        g.player.hp = fminf(PLAYER_MAX_HP, g.player.hp + mend);
     }
     for (int i = 0; i < MAX_ALLIES; i++) {
         Ally *a = &g.allies[i];
         if (!a->alive || Dist2(a->pos, f->pos) > r2) continue;
-        a->hp = fminf(a->maxHp, a->hp + FIELD_HEAL * dt);
+        a->hp = fminf(a->maxHp, a->hp + mend);
     }
 
     /* half way through, it hands out a crate - standing in the bubble pays */
@@ -918,12 +942,22 @@ void FieldUpdate(float dt)
         f->dropped = true;
         SpawnPickup(RandomWeaponCrate(), f->pos);
     }
+    }
 }
 
 void FieldDraw(void)
 {
-    AegisField *f = &g.field;
-    if (!f->alive) return;
+    for (int slot = 0; slot < FIELD_MAX; slot++) {
+    AegisField *f = &g.field[slot];
+    if (!f->alive) continue;
+
+    /* is another shell touching this one? then the link gets on the glass */
+    bool linked = false;
+    for (int j = 0; j < FIELD_MAX && !linked; j++) {
+        if (j == slot || !g.field[j].alive) continue;
+        float touch = f->radius + g.field[j].radius;
+        if (Dist2(f->pos, g.field[j].pos) <= touch * touch) linked = true;
+    }
 
     /* it pops open fast and closes slowly, so the shell reads as a swell */
     float life = f->life / FIELD_LIFE;
@@ -932,6 +966,16 @@ void FieldDraw(void)
     float k    = fminf(open, shut);
     float r    = f->radius * (0.70f + 0.30f * k);
 
+    if (linked) {
+        /* the stacked shell runs hot: brighter fill, double rim */
+        for (int i = 6; i >= 1; i--) {
+            float rr = r * (float)i / 6.0f;
+            DrawCircleV(f->pos, rr, (Color){ 140, 245, 170,
+                         (unsigned char)(34 * k) });
+        }
+        DrawCircleLinesV(f->pos, r * 0.80f,
+                         (Color){ 255, 255, 255, (unsigned char)(110 * k) });
+    }
     for (int i = 6; i >= 1; i--) {
         float rr = r * (float)i / 6.0f;
         DrawCircleV(f->pos, rr, (Color){ 140, 245, 170, (unsigned char)(15 * k) });
@@ -945,6 +989,7 @@ void FieldDraw(void)
         float ang = a + (float)i * (PI / 3.0f);
         Vector2 at = V2Add(f->pos, V2(cosf(ang) * r, sinf(ang) * r));
         DrawCircleV(at, 2.5f, (Color){ 223, 246, 245, (unsigned char)(230 * k) });
+    }
     }
 }
 
@@ -1979,7 +2024,7 @@ void AlliesUpdate(float dt)
                 a->spawnFade    = ALLY_SPAWN_FADE;
                 a->fireTimer    = 0.5f;
                 a->specialTimer = 2.0f;
-                a->specialSel   = GetRandomValue(0, RoleSpecialCount(a->role) - 1);
+                a->specialSel   = 0;   /* spawn on their signature move    */
                 a->distress     = 0.0f;
                 a->helpCool     = 3.0f;
                 a->assistTimer  = 0.0f;
@@ -2264,12 +2309,14 @@ void AlliesUpdate(float dt)
                         "SCATTER, ASSHOLES!", "AEGIS UP.", "WASPS AWAY! RUN! ...THEY RUN!"
                     };
 
+                    /* what fires now, before the bag cycles on */
+                    int fired = RoleSpecial(a->role, a->specialSel);
                     AllySpecial(a);
                     if (GetRandomValue(0, 4) == 0) ChatSayText(i, kCry[a->role]);
 
                     /* the dome is worth more than a burst, so it also costs
                        more of the pilot's attention */
-                    float cool = kSpecials[RoleSpecial(a->role, a->specialSel)].cooldown;
+                    float cool = kSpecials[fired].cooldown;
                     a->specialTimer = cool * AllyCoolMul() *
                                       (0.85f + (float)GetRandomValue(0, 30) / 100.0f);
                     a->fireTimer    = ALLY_FIRE_TIME * AllyFireMul() * hot * 1.7f;
@@ -3046,6 +3093,7 @@ void DevSpawnWingmen(int n)
             a->fireTimer    = 0.6f;
             a->specialTimer = 2.0f;
             a->guardTimer   = 0.0f;
+            a->specialSel   = 0;   /* dev-summoned wings open with the classic */
             a->spawnFade    = 0.0f;
             a->rallyTimer   = 0.0f;
         } else if (i >= n) {
