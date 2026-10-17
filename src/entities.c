@@ -9,6 +9,9 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <stdarg.h>
+#include <stdlib.h>
+#include <string.h>
 
 /* --------------------------------------------------------------------------
  *  Tuning
@@ -428,19 +431,23 @@ void EntitiesReset(void)
         .alive       = true,
     };
 
+    /* The standard squadron is VEX, JUNO and BIT. The dev console can open
+       up to three more seats mid-run, so only the first three slots start
+       alive here. */
+    g_devWingCount = 3;
     for (int i = 0; i < MAX_ALLIES; i++) {
         g.allies[i] = (Ally){
-            .alive        = true,
+            .alive        = (i < 3),
             .pos          = AllyFormationPos(i),
             .vel          = V2(0, 0),
             .angle        = g.player.angle,
             .hp           = ALLY_MAX_HP,
             .maxHp        = ALLY_MAX_HP,
-            .fireTimer    = 0.6f + (float)i * 0.2f,
-            .specialTimer = 2.5f + (float)i * 0.9f,
+            .fireTimer    = 0.6f + (float)(i % 3) * 0.2f,
+            .specialTimer = 2.5f + (float)(i % 3) * 0.9f,
             .specialFlash = 0.0f,
             .slot         = i,
-            .role         = i,     /* the roster is VEX, JUNO, BIT */
+            .role         = i % ALLY_ROLE_COUNT,   /* extras reuse the roster */
         };
     }
 }
@@ -452,6 +459,10 @@ void PlayerDamage(float amount)
 {
     Player *p = &g.player;
     if (!p->alive || p->shieldTimer > 0.0f) return;
+    if (g_devGod) {
+        /* the cheat eats the hit entirely - no flash, no shake, nothing */
+        return;
+    }
 
     p->hp          -= amount;
     p->shieldTimer  = HIT_INVULN;
@@ -517,6 +528,20 @@ typedef struct {
     const char *shortName;   /* cramped spots: the wingmen panel */
     float cooldown;
 } SpecialDef;
+
+/* ------------------------ dev cheat console state ------------------------ */
+bool g_devOpen    = false;
+bool g_devGod     = false;
+char g_devInput[DEV_CMD_MAX]   = "";
+char g_devHistory[DEV_HIST_LINES][DEV_CMD_MAX] = { "" };
+int  g_devWingCount = 3;
+
+static void DevScroll(const char *line)
+{
+    for (int i = DEV_HIST_LINES - 1; i > 0; i--)
+        TextCopy(g_devHistory[i], g_devHistory[i - 1]);
+    TextCopy(g_devHistory[0], line);
+}
 
 static const SpecialDef kSpecials[SPECIAL_KIND_COUNT] = {
     { "OVERSURGE",     "OVSRG",  15.0f },
@@ -1502,8 +1527,12 @@ const AllyProfile *AllyProfileOf(int role)
    one tucked in behind. */
 Vector2 AllyFormationPos(int slot)
 {
-    static const float kAngle[MAX_ALLIES] = { 143.0f, 217.0f, 180.0f };
-    static const float kDist [MAX_ALLIES] = {  74.0f,  74.0f, 112.0f };
+    /* VEX and JUNO tuck behind the wings, BIT hangs wide at the tail; the
+       three dev seats fly tight flank positions and a far escort slot. */
+    static const float kAngle[MAX_ALLIES] = { 143.0f, 217.0f, 180.0f,
+                                              100.0f, 260.0f, 190.0f };
+    static const float kDist [MAX_ALLIES] = {  74.0f,  74.0f, 112.0f,
+                                               88.0f,  88.0f, 132.0f };
 
     int   i = (slot >= 0 && slot < MAX_ALLIES) ? slot : 0;
     float a = g.player.angle + kAngle[i] * DEG2RAD;
@@ -2866,3 +2895,248 @@ void WaveSpawnStep(float dt)
 
     SpawnEnemy(kind, pos);
 }
+
+/* -----------------------------------------------------------------------
+ *  Dev cheat console
+ *
+ *  T opens it in play (like a chat box); the game keeps running but the
+ *  ship goes neutral while you type. Lines are little commands:
+ *
+ *      god              the player stops taking damage
+ *      god off          ...and again when you are brave enough
+ *      hp 500           set the player's hull
+ *      heal             hull and wing patched to full
+ *      wave 40          jump the fight straight to wave 40
+ *      wingmen 6        open dev seats up to six ships
+ *      enemies 12       land a dozen hostiles around the squadron
+ *      clear            wipe the arena
+ *      help             the list, in case you forget
+ *
+ *  Ctrl+Y (any state of play) skips five waves without opening the box.
+ * ----------------------------------------------------------------------- */
+static void DevPrint(const char *fmt, ...)
+{
+    char line[DEV_CMD_MAX];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof line, fmt, ap);
+    va_end(ap);
+    DevScroll(line);
+}
+
+void DevSpawnWingmen(int n)
+{
+    if (n < 0) n = 0;
+    if (n > MAX_ALLIES) n = MAX_ALLIES;
+
+    /* opening a seat puts a fresh pilot next to the player; closing one
+       just benches the ship */
+    for (int i = 0; i < MAX_ALLIES; i++) {
+        Ally *a = &g.allies[i];
+        if (i < n && !a->alive) {
+            a->alive     = true;
+            a->pos       = AllyFormationPos(i);
+            a->vel       = V2(0, 0);
+            a->angle     = g.player.angle;
+            a->hp        = a->maxHp;
+            a->fireTimer    = 0.6f;
+            a->specialTimer = 2.0f;
+            a->spawnFade    = 0.0f;
+            a->rallyTimer   = 0.0f;
+        } else if (i >= n) {
+            a->alive = false;
+        }
+    }
+    g_devWingCount = n;
+}
+
+static void DevSpawnEnemies(int n)
+{
+    if (n < 0) n = 0;
+    if (n > 60) n = 60;
+
+    for (int i = 0; i < n; i++) {
+        EnemyKind k = (EnemyKind)GetRandomValue(ENEMY_RAIDER, ENEMY_TENDER);
+        Vector2 where = V2Add(g.player.pos,
+                              V2((float)GetRandomValue(-320, 320),
+                                 (float)GetRandomValue(-220, 220)));
+        where = ArenaRandomLandNear(where, 24.0f, 64.0f);
+        SpawnEnemyEx(k, where, false);
+    }
+}
+
+static void DevExec(void);
+
+/* A scripted pass over the console, used by the --devtest screenshot run:
+   it opens the box with T so it stays visibly up, and feeds lines the same
+   way typed ENTERs would. */
+static void DevTestLine(const char *line)
+{
+    if (!g_devOpen) DevConsoleToggle();
+    char echo[DEV_CMD_MAX + 4];
+    snprintf(echo, sizeof echo, "> %s", line);
+    DevScroll(echo);
+    TextCopy(g_devInput, line);
+    DevExec();
+    g_devInput[0] = '\0';
+}
+
+void DevRunScriptedTest(void)
+{
+    DevTestLine("wingmen 6");
+    TraceLog(LOG_INFO, "DEVTEST seats %d", g_devWingCount);
+    DevTestLine("enemies 12");
+    int   enemies = 0;
+    for (int i = 0; i < MAX_ENEMIES; i++)
+        if (g.enemies[i].alive) enemies++;
+    TraceLog(LOG_INFO, "DEVTEST enemies %d", enemies);
+    DevTestLine("god");
+    TraceLog(LOG_INFO, "DEVTEST god %d", g_devGod ? 1 : 0);
+    DevTestLine("wave 7");
+    TraceLog(LOG_INFO, "DEVTEST wave %d", g.wave);
+}
+
+void DevConsoleToggle(void)
+{
+    g_devOpen = !g_devOpen;
+    if (g_devOpen) g_devInput[0] = '\0';
+}
+
+static void DevExec(void);
+
+void DevConsoleFeed(void)
+{
+    int k;
+    while ((k = GetKeyPressed()) != 0) {
+#ifndef __EMSCRIPTEN__
+        TraceLog(LOG_INFO, "DEVKEY %d", k);
+#endif
+        if (k == KEY_ESCAPE) {
+            DevConsoleToggle();
+            return;
+        }
+        if (k == KEY_ENTER || k == KEY_KP_ENTER) {
+            char echo[DEV_CMD_MAX + 4];
+            if (g_devInput[0] == '\0') { DevConsoleToggle(); return; }
+            snprintf(echo, sizeof echo, "> %s", g_devInput);
+            DevScroll(echo);
+            DevExec();
+            g_devInput[0] = '\0';
+            continue;
+        }
+        if (k == KEY_BACKSPACE) {
+            size_t len = strlen(g_devInput);
+            if (len > 0) g_devInput[len - 1] = '\0';
+            continue;
+        }
+        if (k >= 32 && k < 127) {
+            char c = (char)((k >= 'A' && k <= 'Z') ? k + 32 : k);
+            size_t len = strlen(g_devInput);
+            if (len + 1 < DEV_CMD_MAX) {
+                g_devInput[len + 0] = c;
+                g_devInput[len + 1] = '\0';
+            }
+        }
+    }
+}
+
+static void DevExec(void)
+{
+    char work[DEV_CMD_MAX];
+    TextCopy(work, g_devInput);
+
+    /* lowercase for a forgiving parser */
+    for (int i = 0; work[i]; i++)
+        if (work[i] >= 'A' && work[i] <= 'Z') work[i] += 32;
+
+    char *word = strtok(work, " ");
+    if (!word) return;
+
+    if (strcmp(word, "help") == 0) {
+        DevPrint("GOD  OFF  HP N  HEAL");
+        DevPrint("WAVE N  WINGMEN N");
+        DevPrint("ENEMIES N  CLEAR");
+        return;
+    }
+
+    if (strcmp(word, "god") == 0) {
+        char *arg = strtok(NULL, " ");
+        g_devGod = !(arg && strcmp(arg, "off") == 0);
+        DevPrint(g_devGod ? "GOD MODE - NO DAMAGE" : "GOD MODE OFF");
+        return;
+    }
+
+    if (strcmp(word, "hp") == 0) {
+        char *arg = strtok(NULL, " ");
+        int n = arg ? atoi(arg) : -1;
+        if (n <= 0) { DevPrint("HP: GIVE A NUMBER"); return; }
+        if (n > 9999) n = 9999;
+        g.player.hp = (float)n;
+        DevPrint("HULL SET TO %d", n);
+        return;
+    }
+
+    if (strcmp(word, "heal") == 0) {
+        g.player.hp = 9999.0f;
+        for (int i = 0; i < MAX_ALLIES; i++) {
+            Ally *a = &g.allies[i];
+            if (a->alive) a->hp = a->maxHp;
+        }
+        DevPrint("SHIPS PATCHED UP");
+        return;
+    }
+
+    if (strcmp(word, "wave") == 0) {
+        char *arg = strtok(NULL, " ");
+        int n = arg ? atoi(arg) : -1;
+        if (n < 1) { DevPrint("WAVE: GIVE A NUMBER"); return; }
+        if (n > 999) n = 999;
+        StartWave(n);
+        DevPrint("JUMPED TO WAVE %d", n);
+        return;
+    }
+
+    if (strcmp(word, "skip") == 0) {
+        StartWave(g.wave + 5);
+        DevPrint("SKIPPED TO WAVE %d", g.wave);
+        return;
+    }
+
+    if (strcmp(word, "wingmen") == 0) {
+        char *arg = strtok(NULL, " ");
+        int n = arg ? atoi(arg) : -1;
+        if (n < 0) { DevPrint("WINGMEN: 0..6"); return; }
+        if (n > MAX_ALLIES) n = MAX_ALLIES;
+        DevSpawnWingmen(n);
+        DevPrint("WING AT %d SHIPS", n);
+        return;
+    }
+
+    if (strcmp(word, "enemies") == 0) {
+        char *arg = strtok(NULL, " ");
+        int n = arg ? atoi(arg) : -1;
+        if (n < 1) { DevPrint("ENEMIES: GIVE A NUMBER"); return; }
+        DevSpawnEnemies(n);
+        DevPrint("LANDED %d HOSTILES", n > 60 ? 60 : n);
+        return;
+    }
+
+    if (strcmp(word, "clear") == 0) {
+        for (int i = 0; i < MAX_ENEMIES; i++) {
+            Enemy *e = &g.enemies[i];
+            if (e->alive) {
+                SpawnBurst(e->pos, 1.2f);
+                e->alive = false;
+            }
+        }
+        g.wavePending = 0;
+        DevPrint("ARENA WIPED");
+        return;
+    }
+
+    DevPrint("UNKNOWN: %s", word);
+}
+
+/* -----------------------------------------------------------------------
+ *  End of the dev console.
+ * ----------------------------------------------------------------------- */

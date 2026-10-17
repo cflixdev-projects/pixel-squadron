@@ -68,12 +68,20 @@ your three wingmen, who chat, bicker and (usually) have your back.
   `CRIT` over the target.
 - **Boost** - hold Shift to spend a rocket plume's worth of extra speed.
 - **Graphics settings** - pause menu, `G`: pick a quality preset (LOW /
-  MEDIUM / HIGH) or flip individual effects. **Bloom** makes bright shots and
-  explosions glow softly, and HIGH adds CRT-style **scanlines** and a
-  **vignette**; particle density is its own toggle, so weaker machines can
-  trade confetti for speed. The fps cap (FREE/30/60/120/144) lives on the
-  same panel, and everything-including the pad bindings-saves to
-  `settings.cfg` the moment you touch it.
+  MEDIUM / HIGH) or flip individual effects. **Bloom** offers four levels
+  (OFF / SOFT / MED / STRONG) for the soft glow on shots and explosions,
+  and there are separate toggles for the CRT screen look, the vignette,
+  particle density, explosion smoke and motion blur. **VSYNC** can be
+  flipped live; **AA (MSAA)** is applied the next time you launch. The fps
+  cap (FREE/30/60/120/144) lives on the same panel, and everything,
+  including the pad bindings, saves to `settings.cfg` the moment you touch
+  it.
+- **Dev cheat console** - press `T` in flight for a chat-box style cheat
+  console: `god` (no damage), `god off`, `hp 500`, `heal`, `wave 40`,
+  `wingmen 6` (up to six ships in formation), `enemies 12`, `clear`, and
+  `help` lists them all. `ENTER` runs a line, `ESC` closes the box; the
+  ship holds its heading while you type. A fresh run resets itself, and
+  `Ctrl+Y` skips five waves without even opening the box.
 - **Wave-based survival** with a score, three weapon levels, rapid fire and
   shields.
 - **Fills the screen** - the game renders into a pixel-perfect virtual screen
@@ -94,6 +102,7 @@ your three wingmen, who chat, bicker and (usually) have your back.
 | Special pool: load a move | `TAB` or `1`-`8` | D-pad (cycles) |
 | Special pool: fire it | `E` | `Y` |
 | Auto-shoot toggle | `V` | `A` |
+| Dev cheat console | `T` (+ `Ctrl+Y` skips 5 waves) | - |
 | Chat bubbles toggle | `H` | `Back` |
 | Cap the fps | `F` (free/30/60/120/144) | - |
 | Rebind the pad | `C` (from the pause menu) | - |

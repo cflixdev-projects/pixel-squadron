@@ -21,8 +21,9 @@ Game       g     = {0};
 InputState input = {0};
 int fpsCap = 0;  /* 0 = uncapped */
 
-Graphics gfx = { .quality = 1, .bloom = 1, .crt = 0, .vignette = 1,
-                  .particles = 1, .smoke = 1, .motionBlur = 0 };
+Graphics gfx = { .quality = 1, .bloomLevel = 2, .bloom = 1, .crt = 0,
+                  .vignette = 1, .particles = 1, .smoke = 1,
+                  .motionBlur = 0, .vsync = 0, .msaa = 1 };
 bool    g_autoTargetOn = false;   /* auto-shoot: a target is being tracked */
 Vector2 g_autoTarget    = { 0, 0 };
 int gfxPanelMode = 0;   /* pause-menu graphics screen */
@@ -40,8 +41,20 @@ static void GfxSettingsLoad(void)
 
     int v;
     if (sscanf(text, "quality %d", &v) == 1 && v >= 0 && v <= 2) gfx.quality = v;
+    if (strstr(text, "bloomLevel 0")       != NULL) gfx.bloomLevel  = 0;
+    else if (strstr(text, "bloomLevel 1")  != NULL) gfx.bloomLevel  = 1;
+    else if (strstr(text, "bloomLevel 2")  != NULL) gfx.bloomLevel  = 2;
+    else if (strstr(text, "bloomLevel 3")  != NULL) gfx.bloomLevel  = 3;
     if (strstr(text, "bloom 1")            != NULL) gfx.bloom       = 1;
     else if (strstr(text, "bloom 0")       != NULL) gfx.bloom       = 0;
+    /* honour the old blob if it is there */
+    if (strstr(text, "bloomLevel ")        == NULL && strstr(text, "bloom 1") != NULL) {
+        gfx.bloomLevel = 2;
+    }
+    if (strstr(text, "vsync 1")            != NULL) gfx.vsync       = 1;
+    else if (strstr(text, "vsync 0")       != NULL) gfx.vsync       = 0;
+    if (strstr(text, "msaa 1")             != NULL) gfx.msaa        = 1;
+    else if (strstr(text, "msaa 0")        != NULL) gfx.msaa        = 0;
     /* the old hard scanline overlay grew into the CRT pass; honour both */
     if (strstr(text, "crt 1")              != NULL) gfx.crt         = 1;
     else if (strstr(text, "crt 0")         != NULL) gfx.crt         = 0;
@@ -65,10 +78,12 @@ static void GfxSettingsSave(void)
 {
     char text[256];
     snprintf(text, sizeof text,
-             "quality %d\nbloom %d\ncrt %d\nvignette %d\n"
-             "particles %d\nsmoke %d\nmotionBlur %d\nfpsCap %d\n",
-             gfx.quality, gfx.bloom, gfx.crt, gfx.vignette,
-             gfx.particles, gfx.smoke, gfx.motionBlur, fpsCap);
+             "quality %d\nbloomLevel %d\nbloom %d\ncrt %d\nvignette %d\n"
+             "particles %d\nsmoke %d\nmotionBlur %d\nvsync %d\nmsaa %d\n"
+             "fpsCap %d\n",
+             gfx.quality, gfx.bloomLevel, gfx.bloom, gfx.crt, gfx.vignette,
+             gfx.particles, gfx.smoke, gfx.motionBlur, gfx.vsync, gfx.msaa,
+             fpsCap);
     SaveFileText(GFX_SETTINGS_FILE, text);
 }
 
@@ -78,16 +93,16 @@ static void GfxApplyQuality(int q)
     gfx.quality = q;
     switch (q) {
         case 0:  /* LOW: every post effect off, shortest particle list */
-            gfx.bloom = 0; gfx.crt = 0; gfx.vignette = 0; gfx.particles = 0;
-            gfx.smoke = 0; gfx.motionBlur = 0;
+            gfx.bloomLevel = 0; gfx.bloom = 0; gfx.crt = 0; gfx.vignette = 0;
+            gfx.particles = 0; gfx.smoke = 0; gfx.motionBlur = 0;
             break;
         case 1:  /* MEDIUM: the game's intended look without tube tricks */
-            gfx.bloom = 1; gfx.crt = 0; gfx.vignette = 1; gfx.particles = 1;
-            gfx.smoke = 1; gfx.motionBlur = 0;
+            gfx.bloomLevel = 2; gfx.bloom = 1; gfx.crt = 0; gfx.vignette = 1;
+            gfx.particles = 1; gfx.smoke = 1; gfx.motionBlur = 0;
             break;
         default: /* HIGH: everything, softly */
-            gfx.bloom = 1; gfx.crt = 1; gfx.vignette = 1; gfx.particles = 1;
-            gfx.smoke = 1; gfx.motionBlur = 1;
+            gfx.bloomLevel = 2; gfx.bloom = 1; gfx.crt = 1; gfx.vignette = 1;
+            gfx.particles = 1; gfx.smoke = 1; gfx.motionBlur = 1;
             break;
     }
 }
@@ -460,6 +475,19 @@ static void GatherInput(void)
         if (IsGamepadButtonPressed(0, binds.button[BIND_SPECIAL])) special = true;
     }
 
+    /* While the dev console is up, the ship holds its heading and the
+       guns go quiet - exactly like a chat box. */
+    if (g_devOpen) {
+        DevConsoleFeed();
+        input.move    = V2(0, 0);
+        input.aim     = V2(cosf(g.player.angle), sinf(g.player.angle));
+        input.firing  = false;
+        input.boost   = false;
+        input.rally   = false;
+        input.special = false;
+        return;
+    }
+
     /* --- toggles ---------------------------------------------------------
        AUTO-SHOOT: guns take care of themselves - aim snaps to the nearest
        enemy and they keep talking, while the specials and movement stay
@@ -732,6 +760,10 @@ static void StartNewRun(void)
 
     ChatReset();
 
+    /* a fresh run is an honest run (the console itself can undo this) */
+    g_devOpen = false;
+    g_devGod  = false;
+
     cameraPos = g.player.pos;
 
     StartWave(1);
@@ -804,6 +836,7 @@ static void UpdatePlaying(float dt)
             }
             g.state     = STATE_GAMEOVER;
             g.stateTimer = 0.0f;
+            g_devOpen    = false;   /* the cheat box has nothing to say here */
         }
     }
 }
@@ -893,15 +926,21 @@ static const char *kBloomFs =
     "uniform vec2 texelSize;\n"
     "uniform float strength;\n"
     "void main() {\n"
-    "    vec3 sum = vec3(0.0);\n"
+    "    /* The centre tap is what keeps HUD text calm: a thin glyph stroke\n"
+    "       owns one sample out of nine at most, so it glows a whisper,\n"
+    "       while big burny things fill the whole kernel and keep their\n"
+    "       full halo. The wider ring spreads what is left of it, too. */\n"
+    "    vec3 sum = SAMPLE(texture0, fragTexCoord).rgb;\n"
+    "    float m0 = max(sum.r, max(sum.g, sum.b));\n"
+    "    sum     *= smoothstep(0.88, 1.02, m0);\n"
     "    for (int i = 0; i < 8; i++) {\n"
     "        float ang = 6.2831853 * 0.125 * float(i);\n"
-    "        vec2  off = vec2(cos(ang), sin(ang)) * texelSize * 1.8;\n"
+    "        vec2  off = vec2(cos(ang), sin(ang)) * texelSize * 2.8;\n"
     "        vec3  s   = SAMPLE(texture0, fragTexCoord + off).rgb;\n"
     "        float m   = max(s.r, max(s.g, s.b));\n"
     "        sum      += s * smoothstep(0.88, 1.02, m);\n"
     "    }\n"
-    "    " GLSL_FS_OUT " = vec4(sum * 0.125 * strength, 1.0);\n"
+    "    " GLSL_FS_OUT " = vec4(sum * 0.1111 * strength, 1.0);\n"
     "}\n";
 
 /* ---- CRT screen ----
@@ -1081,8 +1120,12 @@ static void PostFxRender(void)
 
     if (!bloomOK || !gfx.bloom || bloomRT.id == 0) return;
 
+    static const float kBloomStrength[4] = { 0.0f, 0.42f, 0.60f, 0.88f };
     float texel[2] = { 1.0f / (float)viewW, 1.0f / (float)viewH };
-    float strength = 0.6f;
+    int   bloomIdx = gfx.bloomLevel;
+    if (bloomIdx < 0) bloomIdx = 0;
+    if (bloomIdx > 3) bloomIdx = 3;
+    float strength = kBloomStrength[bloomIdx];
 
     BeginTextureMode(bloomRT);
     ClearBackground(BLANK);
@@ -1317,9 +1360,18 @@ static void HandleGlobalKeys(void)
             break;
 
         case STATE_PLAY:
-            if (IsKeyPressed(KEY_P) || IsKeyPressed(KEY_ESCAPE) ||
-                IsGamepadButtonPressed(0, GAMEPAD_BUTTON_MIDDLE_RIGHT)) {
+            if (!g_devOpen && (IsKeyPressed(KEY_P) || IsKeyPressed(KEY_ESCAPE) ||
+                IsGamepadButtonPressed(0, GAMEPAD_BUTTON_MIDDLE_RIGHT))) {
                 g.state = STATE_PAUSED;
+            }
+            /* the dev console (T) and its two quick cheats: Ctrl+Y jumps
+               five waves ahead, F1+Y opens the whole cheat box anyway */
+            if (!g_devOpen && IsKeyPressed(KEY_T)) { DevConsoleToggle(); break; }
+            if (IsKeyPressed(KEY_Y) &&
+                (IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL))) {
+                StartWave(g.wave + 5);
+                TextCopy(g.message, "SKIPPED 5 WAVES");
+                g.messageTimer = 1.5f;
             }
             break;
 
@@ -1330,7 +1382,7 @@ static void HandleGlobalKeys(void)
 
             /* ...and so does the graphics panel. */
             if (gfxPanelMode) {
-                enum { GFX_ROWS = 8 };
+                enum { GFX_ROWS = 10 };
                 if (IsKeyPressed(KEY_G) || IsKeyPressed(KEY_ESCAPE)) {
                     gfxPanelMode = 0;
                     break;
@@ -1353,13 +1405,29 @@ static void HandleGlobalKeys(void)
                 if (dir != 0) {
                     switch (gfxPanelSel) {
                         case 0: GfxApplyQuality((gfx.quality + dir + 3) % 3); break;
-                        case 1: gfx.bloom      = !gfx.bloom;     break;
+                        case 1: {   /* bloom: OFF/SOFT/MEDIUM/STRONG */
+                            gfx.bloomLevel = (gfx.bloomLevel + dir + 4) % 4;
+                            gfx.bloom      = (gfx.bloomLevel > 0);
+                            break;
+                        }
                         case 2: gfx.crt        = !gfx.crt;       break;
                         case 3: gfx.vignette   = !gfx.vignette;  break;
                         case 4: gfx.particles  = !gfx.particles; break;
                         case 5: gfx.smoke      = !gfx.smoke;     break;
                         case 6: gfx.motionBlur = !gfx.motionBlur; break;
-                        case 7: {
+                        case 7: {   /* vsync only */
+                            gfx.vsync = !gfx.vsync;
+#ifndef __EMSCRIPTEN__
+                            if (gfx.vsync) SetWindowState(FLAG_VSYNC_HINT);
+                            else           ClearWindowState(FLAG_VSYNC_HINT);
+#endif
+                            break;
+                        }
+                        case 8: {   /* msaa wants a fresh window to matter */
+                            gfx.msaa = !gfx.msaa;
+                            break;
+                        }
+                        case 9: {
                             static const int caps[] = { 0, 30, 60, 120, 144 };
                             int idx = 0;
                             for (int i = 0; i < 5; i++)
@@ -1440,6 +1508,8 @@ int main(int argc, char **argv)
     int  forceBiome = -1;
     int  wingUp = -1;
     bool mouseTest = false;
+    bool devTest = false;     /* dev: scripted cheat console pass */
+    bool devTestDone = false;
 #if !defined(__EMSCRIPTEN__)
     int startFlags = START_CENTER | START_FULLSCREEN;   /* play big by default */
 #endif
@@ -1458,6 +1528,8 @@ int main(int argc, char **argv)
 #endif
         } else if (strcmp(argv[i], "--endcard") == 0) {
             endCard = true;      /* dev: screenshot the end-of-run report */
+        } else if (strcmp(argv[i], "--devtest") == 0) {
+            devTest = true;      /* dev: run the scripted cheat console pass */
         } else if (strcmp(argv[i], "--titlecard") == 0) {
             titleCard = true;    /* dev: screenshot the title card */
         } else if (strcmp(argv[i], "--biome") == 0 && i + 1 < argc) {
@@ -1504,14 +1576,17 @@ int main(int argc, char **argv)
        FLAG_WINDOW_RESIZABLE set hands that sizing to raylib's own resize
        callback, which pins the canvas to the browser viewport, and there is no
        monitor to fit or to take over either: the browser owns fullscreen. */
-    SetConfigFlags(FLAG_MSAA_4X_HINT | FLAG_WINDOW_RESIZABLE);
+        GfxSettingsLoad();   /* before the window: vsync and msaa plug in here */
+
+    if (gfx.msaa) SetConfigFlags(FLAG_MSAA_4X_HINT | FLAG_WINDOW_RESIZABLE);
+    else          SetConfigFlags(FLAG_WINDOW_RESIZABLE);
     InitWindow(BASE_W * 3, BASE_H * 3, "Pixel Squadron - raylib twin-stick shooter");
     InitAudioDevice();
 #else
-    /* No VSYNC hint: with it on the swap blocks and "FREE" never beats the
-       monitor's refresh by a pixel. The FPS-cap system regulates the loop
-       itself, so the driver is left alone. */
-    SetConfigFlags(FLAG_MSAA_4X_HINT);
+    /* No VSYNC hint at boot - the saved setting gets applied right after
+       InitWindow with a real swap-interval, so it can be flipped live. */
+    GfxSettingsLoad();   /* before the window: msaa plugs in here, vsync below */
+    if (gfx.msaa) SetConfigFlags(FLAG_MSAA_4X_HINT);
     InitWindow(BASE_W * 3, BASE_H * 3, "Pixel Squadron - raylib twin-stick shooter");
     InitAudioDevice();
 
@@ -1527,8 +1602,10 @@ int main(int argc, char **argv)
     /* the game draws its own aiming cursor (or none at all during auto
        shoot), so the OS arrow would just hover around on top of art */
     HideCursor();
+    /* swap interval is the one thing the hint roundabout never did right:
+       set it from the saved setting right here, live */
+    if (gfx.vsync) SetWindowState(FLAG_VSYNC_HINT);
 #endif
-    GfxSettingsLoad();
     SetTargetFPS((fpsCap <= 0) ? 1000 : fpsCap);  /* 0 = uncapped */
     SetRandomSeed(seed ? seed : (unsigned)time(NULL));
     ArenaForceBiome(forceBiome);   /* no-op unless --biome was passed */
@@ -1570,6 +1647,7 @@ int main(int argc, char **argv)
     }
 
     if (demoSeconds > 0.0f) g.autoPilot = true;
+    if (devTest)   g.autoPilot = false;
     if (mouseTest) { g.autoPilot = false;
 #if !defined(__EMSCRIPTEN__)
         startFlags &= ~START_FULLSCREEN;
@@ -1687,6 +1765,13 @@ int main(int argc, char **argv)
         /* Dev aid: keep the wing-rearm banner pinned open for a screenshot. */
         if (wingUp >= 0) g.levelUpFlash = 2.5f;
 
+        /* Dev aid: run the scripted cheat console pass mid-run, then keep
+           the box open for the screenshot it goes into. */
+        if (devTest && !devTestDone && g.state == STATE_PLAY && g.survived > 2.0f) {
+            DevRunScriptedTest();
+            devTestDone = true;   /* the box stays open for the screenshot */
+        }
+
         /* looping engine hum, louder the faster we fly */
         if (!muted && g.state == STATE_PLAY && g.player.alive) {
             if (!IsSoundPlaying(assets.engine)) {
@@ -1719,6 +1804,17 @@ int main(int argc, char **argv)
                      census[ENEMY_DART], census[ENEMY_LANCER], census[ENEMY_SPLITTER],
                      census[ENEMY_TENDER],
                      g.allyKills[0], g.allyKills[1], g.allyKills[2], allyShots, g.rallyTimer);
+            break;
+        }
+
+        if (devTest && devTestDone && g.timer >= 6.0f) {
+            CaptureVirtualScreen(shotPath ? shotPath : "devtest.png");
+            int enemies = 0;
+            for (int i = 0; i < MAX_ENEMIES; i++)
+                if (g.enemies[i].alive) enemies++;
+            TraceLog(LOG_INFO, "DEVTEST final: hp %.0f alive %d god %d wave %d seats %d enemies %d score %d",
+                     g.player.hp, g.player.alive ? 1 : 0, g_devGod ? 1 : 0,
+                     g.wave, g_devWingCount, enemies, g.score);
             break;
         }
 

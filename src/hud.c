@@ -174,10 +174,11 @@ void HudDraw(Camera2D cam)
     /* --- the squadron, below the hull panel --------------------------- */
     /* Taller rows with a clear gap under the heading: at the old 11px pitch
        the first name ran straight into the "WINGMEN" title. */
-    DrawPanel((Rectangle){ 6, 38, 192, 64 });
+    float wingH = 20.0f + 14.0f * (float)g_devWingCount;
+    DrawPanel((Rectangle){ 6, 38, 192, wingH });
     DrawTextPixShadow(assets.font, "WINGMEN", V2(10, 42), 1, COL_SHALLOW);
 
-    for (int i = 0; i < MAX_ALLIES; i++)
+    for (int i = 0; i < g_devWingCount; i++)
         DrawWingmanRow(i, 58.0f + (float)i * 14.0f);
 
     /* --- score, top right --------------------------------------------- */
@@ -204,14 +205,12 @@ void HudDraw(Camera2D cam)
     DrawTextPixShadow(assets.font, biome, V2(floorf((RENDER_W - biomeW) * 0.5f), 30), 1,
                       (Color){ 168, 196, 204, 200 });
 
-    /* --- auto-shoot badge, top right corner --------------------------- */
+    /* --- auto-shoot badge: bottom left, just above the meters, so the
+       score panel on the right stays clear of clutter -------------------- */
     if (input.autoAim) {
-        const char *t = "AUTO-SHOOT";
-        float w = TextWidthPix(assets.font, t, 1) + 10.0f;
-        DrawRectangle((int)(RENDER_W - w - 6.0f), 6, (int)w, 13,
-                      (Color){ 10, 46, 24, 210 });
-        DrawTextPix(assets.font, t, V2(RENDER_W - w - 1.0f, 9), 1,
-                    (Color){ 140, 235, 150, 255 });
+        DrawPanel((Rectangle){ 6, RENDER_H - 66, 92, 16 });
+        DrawTextPix(assets.font, "AUTO-SHOOT", V2(11, RENDER_H - 63), 1,
+                    (Color){ 140, 235, 150, 235 });
     }
 
     /* --- boost, recall and ultimate meters, bottom left --------------- */
@@ -486,6 +485,43 @@ void HudDraw(Camera2D cam)
         DrawRectangle(0, 0, 6, RENDER_H,  (Color){ 222, 75, 30, a });
         DrawRectangle(RENDER_W - 6, 0, 6, RENDER_H, (Color){ 222, 75, 30, a });
     }
+
+    /* --- dev cheat console (T): a chat box ------------------------------
+       newest lines sit just above the input; the line being typed gets a
+       blinking block cursor like a real terminal. It is only up while it is
+       being used, so nothing underneath has to make room for it forever. */
+    if (g_devOpen) {
+        float x  = 6.0f;
+        float w  = 292.0f;
+        float lh = 13.0f;
+        float pad = 7.0f;
+        float h  = pad * 2.0f + lh * (float)(DEV_HIST_LINES + 1);
+        float y  = floorf(RENDER_H - h - 6.0f);
+
+        DrawRectangle((int)x, (int)y, (int)w, (int)h, (Color){ 8, 14, 20, 205 });
+        DrawRectangleLinesEx((Rectangle){ x, y, w, h }, 1.0f,
+                             (Color){ 58, 96, 118, 255 });
+
+        /* history: the array stores newest first, so it is printed reversed */
+        for (int k = 0; k < DEV_HIST_LINES; k++) {
+            const char *line = g_devHistory[DEV_HIST_LINES - 1 - k];
+            if (!line[0]) continue;
+            unsigned char a = (unsigned char)(110 + 120 * (DEV_HIST_LINES - 1 - k) / (DEV_HIST_LINES - 1));
+            DrawTextPix(assets.font, line, V2(x + 6.0f, y + pad + lh * (float)k), 1,
+                        (Color){ 168, 196, 204, a });
+        }
+
+        /* input line with a blinking block cursor */
+        char lineBuf[DEV_CMD_MAX + 8];
+        snprintf(lineBuf, sizeof lineBuf, "> %s", g_devInput);
+        DrawTextPix(assets.font, lineBuf, V2(x + 6.0f, y + pad + lh * (float)DEV_HIST_LINES), 1,
+                    (Color){ 224, 244, 252, 255 });
+        float typed = TextWidthPix(assets.font, lineBuf, 1);
+        if (sinf(g.timer * 7.0f) > 0.0f) {
+            DrawRectangle((int)(x + 6.0f + typed), (int)(y + pad + lh * DEV_HIST_LINES) + 1,
+                          6, 10, (Color){ 126, 226, 250, 220 });
+        }
+    }
 }
 
 /* --------------------------------------------------------------------------
@@ -641,15 +677,17 @@ void HudDrawGraphics(int centre)
 {
     static const struct SettingsRow {
         const char *label;
-        const char *options[3];
+        const char *options[4];
     } kRows[] = {
-        { "QUALITY",    { "LOW", "MEDIUM", "HIGH" } },
-        { "BLOOM",      { "OFF", "ON", NULL } },
-        { "CRT SCREEN", { "OFF", "ON", NULL } },
-        { "VIGNETTE",   { "OFF", "ON", NULL } },
-        { "PARTICLES",  { "SIMPLE", "RICH", NULL } },
-        { "SMOKE",      { "OFF", "ON", NULL } },
-        { "MOTION BLUR",{ "OFF", "ON", NULL } },
+        { "QUALITY",    { "LOW", "MEDIUM", "HIGH", NULL } },
+        { "BLOOM",      { "OFF", "SOFT", "MED", "STRONG" } },
+        { "CRT SCREEN", { "OFF", "ON", NULL, NULL } },
+        { "VIGNETTE",   { "OFF", "ON", NULL, NULL } },
+        { "PARTICLES",  { "SIMPLE", "RICH", NULL, NULL } },
+        { "SMOKE",      { "OFF", "ON", NULL, NULL } },
+        { "MOTION BLUR",{ "OFF", "ON", NULL, NULL } },
+        { "VSYNC",      { "OFF", "ON", NULL, NULL } },
+        { "AA (MSAA)",  { "OFF", "ON", NULL, NULL } },
     };
     const int kRowsCount = (int)(sizeof kRows / sizeof kRows[0]);
     const int kTotal = kRowsCount + 1;   /* + fps cap */
@@ -664,18 +702,29 @@ void HudDrawGraphics(int centre)
     for (int i = 0; i < kTotal; i++) {
         bool sel = (i == gfxPanelSel);
 
-        /* the value each row shows right now */
+        /* the value each row shows right now. vsync and msaa are desktop
+           window plumbing - the browser drives both itself. */
+#if defined(__EMSCRIPTEN__)
+        static const char *const kWebNA = "N/A";
+#endif
         const char *value;
         char capText[12];
         if (i < kRowsCount) {
             switch (i) {
-                case 0: value = kRows[0].options[gfx.quality];    break;
-                case 1: value = kRows[1].options[gfx.bloom];     break;
-                case 2: value = kRows[2].options[gfx.crt];       break;
-                case 3: value = kRows[3].options[gfx.vignette];  break;
-                case 4: value = kRows[4].options[gfx.particles]; break;
-                case 5: value = kRows[5].options[gfx.smoke];     break;
-                case 6: value = kRows[6].options[gfx.motionBlur];break;
+                case 0: value = kRows[0].options[gfx.quality];       break;
+                case 1: value = kRows[1].options[gfx.bloomLevel];   break;
+                case 2: value = kRows[2].options[gfx.crt];          break;
+                case 3: value = kRows[3].options[gfx.vignette];     break;
+                case 4: value = kRows[4].options[gfx.particles];    break;
+                case 5: value = kRows[5].options[gfx.smoke];        break;
+                case 6: value = kRows[6].options[gfx.motionBlur];   break;
+#if defined(__EMSCRIPTEN__)
+                case 7: value = kWebNA;                             break;
+                case 8: value = kWebNA;                             break;
+#else
+                case 7: value = kRows[7].options[gfx.vsync];        break;
+                case 8: value = kRows[8].options[gfx.msaa];         break;
+#endif
                 default: value = ""; break;
             }
         } else if (fpsCap > 0) {
@@ -692,7 +741,8 @@ void HudDrawGraphics(int centre)
                           (Color){ 255, 236, 159, 255 });
         }
 
-        snprintf(line, sizeof line, "%-11s %s", (i < kRowsCount) ? kRows[i].label : "FPS CAP", value);
+        const char *label = (i == kTotal - 1) ? "FPS CAP" : kRows[i].label;
+        snprintf(line, sizeof line, "%-11s %s", label, value);
         DrawTextPix(assets.font, line, V2(x, rowY), 1,
                     sel ? (Color){ 255, 236, 159, 255 } : COL_SHALLOW);
 

@@ -177,7 +177,7 @@ extern const Color kRockRamp[BIOME_COUNT][3];
 #define MAX_PICKUPS 48
 #define MAX_BURSTS 80
 #define MAX_POPUPS 40
-#define MAX_ALLIES 3
+#define MAX_ALLIES 6   /* 3 standard pilots + dev-spawned extras */
 #define ALLY_RESPAWN 15.0f  /* seconds before a downed wingman rejoins */
 #define ALLY_POWER_TIME  9.0f    /* a weapon crate keeps a wingman hot   */
 #define ALLY_SHIELD_TIME 8.0f    /* a shield crate keeps a wingman alive  */
@@ -618,14 +618,32 @@ extern Vector2 g_autoTarget;  /* ...and this is where it is      */
    panel and persisted across sessions. */
 typedef struct {
     int quality;    /* preset: 0 low, 1 medium, 2 high        */
+    int bloomLevel; /* 0 off, 1 soft, 2 medium, 3 strong      */
     int bloom;      /* glow on shots, explosions, bright bits */
     int crt;        /* soft tube look: scan, glitch, falloff  */
     int vignette;   /* dark corners (when CRT is off)         */
     int particles;  /* 0 simple, 1 rich burst counts          */
     int smoke;      /* grey puffs hanging on explosions       */
     int motionBlur; /* fading trails behind fast things       */
+    int vsync;      /* swap-block each monitor frame (desktop) */
+    int msaa;       /* GPU anti-aliasing; applied next launch */
 } Graphics;
 extern Graphics gfx;
+
+/* ------------------ dev cheat console (press T in play) --------------- */
+#define DEV_HIST_LINES 6
+#define DEV_CMD_MAX    48
+
+extern bool g_devOpen;                 /* the console is up, type away   */
+extern bool g_devGod;                  /* cheat: the player takes no hits */
+extern char g_devInput[DEV_CMD_MAX];   /* line being typed               */
+extern char g_devHistory[DEV_HIST_LINES][DEV_CMD_MAX]; /* last answers   */
+extern int  g_devWingCount;            /* live wingman slots (HUD)       */
+
+void DevConsoleToggle(void);           /* T - open/close the cheat box   */
+void DevConsoleFeed(void);             /* while it is open: key handling */
+void DevSpawnWingmen(int n);           /* open n seats, 0..MAX_ALLIES    */
+void DevRunScriptedTest(void);         /* --devtest cheat verification   */
 
 /* pause-menu settings screen */
 extern int gfxPanelMode;   /* 0 hidden, 1 open */
