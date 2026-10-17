@@ -15,7 +15,43 @@
 
 #if defined(__EMSCRIPTEN__)
 #include <emscripten.h>   /* EM_ASM, for keeping the pad bindings across reloads */
+
+/* raylib 5.5's WindowShouldClose() literally sleeps 16 ms on every call on
+   the web (rcore_web.c). Calling it each frame - like the desktop loop does -
+   pins the whole game at ~56 fps, no matter what the fps cap or the vsync
+   switch say. The web loop therefore never calls it; these two helpers do
+   the pacing instead:
+   - WaitForNextAnimationFrame() parks the wasm frame until the browser shows
+     one, so the picture follows the monitor (a 144 Hz screen stays 144).
+   - WebFramePace() rides the cap steps on top of that with a small frame
+     budget; FREE just yields once per frame so the browser can breathe. */
+EM_ASYNC_JS(void, WaitForNextAnimationFrame, (), {
+    await new Promise(function (resolve) { requestAnimationFrame(resolve); });
+});
+
+static void WebFramePace(void)
+{
+    if (fpsCap <= 0) { emscripten_sleep(0); return; }   /* FREE: pump, no pace */
+
+    static double budget   = 0.0;
+    static double lastTick = 0.0;
+    double step = 1.0 / (double)fpsCap;
+
+    for (;;) {
+        WaitForNextAnimationFrame();
+        double now = GetTime();
+        double gap = (lastTick > 0.0) ? (now - lastTick) : step;
+        lastTick   = now;
+        budget    += gap;
+        if (budget > 3.0 * step) budget = 3.0 * step;   /* no burst catch-up */
+        if (budget >= step) { budget -= step; break; }  /* this tick draws */
+    }
+}
+
+/* test hook: browser checks read the real fps counter straight out of wasm */
+EMSCRIPTEN_KEEPALIVE float WebFpsProbe(void) { return (float)GetFPS(); }
 #endif
+
 
 Game       g     = {0};
 InputState input = {0};
@@ -28,6 +64,20 @@ bool    g_autoTargetOn = false;   /* auto-shoot: a target is being tracked */
 Vector2 g_autoTarget    = { 0, 0 };
 int gfxPanelMode = 0;   /* pause-menu graphics screen */
 int gfxPanelSel  = 0;
+
+/* One place for the fps cap, because the web wants it handled differently:
+   raylib's own limiter spends its wait inside EndDrawing, and on the web that
+   wait lands on setTimeout granularity - so the web loop paces itself in
+   WebFramePace() and raylib's target is switched off there. */
+static void ApplyFpsCap(void)
+{
+#if defined(__EMSCRIPTEN__)
+    SetTargetFPS(0);   /* pacing lives in WebFramePace() */
+#else
+    SetTargetFPS((fpsCap <= 0) ? 1000 : fpsCap);
+#endif
+}
+
 int pauseMenuSel = 0;
 
 #define GFX_SETTINGS_FILE "settings.cfg"
@@ -1359,7 +1409,7 @@ static void HandleGlobalKeys(void)
             if (fpsOpts[i] == fpsCap) { fpsIdx = i; break; }
         fpsIdx = (fpsIdx + 1) % 5;
         fpsCap = fpsOpts[fpsIdx];
-        SetTargetFPS((fpsCap <= 0) ? 1000 : fpsCap);
+        ApplyFpsCap();
 
         char label[24];
         if (fpsCap <= 0) snprintf(label, sizeof label, "FPS CAP: FREE");
@@ -1452,7 +1502,7 @@ static void HandleGlobalKeys(void)
                             for (int i = 0; i < 5; i++)
                                 if (caps[i] == fpsCap) idx = i;
                             fpsCap = caps[(idx + dir + 5) % 5];
-                            SetTargetFPS((fpsCap <= 0) ? 1000 : fpsCap);
+                            ApplyFpsCap();
                             break;
                         }
                     }
@@ -1683,10 +1733,17 @@ int main(int argc, char **argv)
     if (titleCard) {
         float shotAt = (demoSeconds > 0.0f) ? demoSeconds : 0.7f;
 
+#if defined(__EMSCRIPTEN__)
+        while (g.timer < shotAt) {       /* WindowShouldClose() sleeps 16 ms on the web */
+#else
         while (!WindowShouldClose() && g.timer < shotAt) {
+#endif
             float dt = fminf(GetFrameTime(), 0.05f);
             g.timer += dt;
             DrawFrame();
+#if defined(__EMSCRIPTEN__)
+            WebFramePace();
+#endif
         }
 
         CaptureVirtualScreen(shotPath ? shotPath : "title.png");
@@ -1699,7 +1756,14 @@ int main(int argc, char **argv)
         return 0;
     }
 
+#if defined(__EMSCRIPTEN__)
+    while (!wantQuit) {   /* WindowShouldClose() sleeps a hard 16 ms on the web */
+#else
     while (!WindowShouldClose() && !wantQuit) {
+#endif
+#if defined(__EMSCRIPTEN__)
+        WebFramePace();   /* cap pacing + event-loop pump (rAF based) */
+#endif
         float dt = fminf(GetFrameTime(), 0.05f);
         g.timer += dt;
 
