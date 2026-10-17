@@ -1655,7 +1655,7 @@ int AlliesAliveCount(void)
 
 /* How many live enemies are sitting on top of `from`? Used to decide that a
    wingman is in over their head. */
-static int EnemiesNear(Vector2 from, float radius)
+int EnemiesNear(Vector2 from, float radius)
 {
     float r2 = radius * radius;
     int   n  = 0;
@@ -2319,7 +2319,9 @@ void AlliesUpdate(float dt)
                     float cool = kSpecials[fired].cooldown;
                     a->specialTimer = cool * AllyCoolMul() *
                                       (0.85f + (float)GetRandomValue(0, 30) / 100.0f);
-                    a->fireTimer    = ALLY_FIRE_TIME * AllyFireMul() * hot * 1.7f;
+                    /* the ultimate never interrupts the guns: they keep
+                       pouring normal shots straight through it */
+                    a->fireTimer    = ALLY_FIRE_TIME * AllyFireMul() * hot;
                 } else {
                     AllyShoot(a);
                     a->fireTimer = ALLY_FIRE_TIME * AllyFireMul() * hot *

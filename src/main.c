@@ -59,7 +59,8 @@ int fpsCap = 0;  /* 0 = uncapped */
 
 Graphics gfx = { .quality = 1, .bloomLevel = 2, .bloom = 1, .crt = 0,
                   .vignette = 1, .particles = 1, .smoke = 1,
-                  .motionBlur = 0, .vsync = 0, .msaa = 1, .display = 1 };
+                  .motionBlur = 0, .vsync = 0, .msaa = 1, .display = 1,
+                  .shake = 1 };
 bool    g_autoTargetOn = false;   /* auto-shoot: a target is being tracked */
 Vector2 g_autoTarget    = { 0, 0 };
 int gfxPanelMode = 0;   /* pause-menu graphics screen */
@@ -127,6 +128,9 @@ static void GfxSettingsLoad(void)
     if ((at = strstr(text, "display")) != NULL &&
         sscanf(at, "display %d", &v) == 1 && (v == 0 || v == 1))
         gfx.display = v;
+    if ((at = strstr(text, "shake")) != NULL &&
+        sscanf(at, "shake %d", &v) == 1 && (v == 0 || v == 1))
+        gfx.shake = v;
 
     MemFree(text);
 }
@@ -137,10 +141,10 @@ static void GfxSettingsSave(void)
     snprintf(text, sizeof text,
              "quality %d\nbloomLevel %d\nbloom %d\ncrt %d\nvignette %d\n"
              "particles %d\nsmoke %d\nmotionBlur %d\nvsync %d\nmsaa %d\n"
-             "fpsCap %d\ndisplay %d\n",
+             "fpsCap %d\ndisplay %d\nshake %d\n",
              gfx.quality, gfx.bloomLevel, gfx.bloom, gfx.crt, gfx.vignette,
              gfx.particles, gfx.smoke, gfx.motionBlur, gfx.vsync, gfx.msaa,
-             fpsCap, gfx.display);
+             fpsCap, gfx.display, gfx.shake);
     SaveFileText(GFX_SETTINGS_FILE, text);
 }
 
@@ -669,6 +673,14 @@ static void GatherInput(void)
             aim    = V2Norm(V2Sub(best->pos, g.player.pos));
             firing = true;
 
+            /* hands-free flies the whole loadout: when enemies crowd in and
+               the ultimate meter is ready, it pops on its own. Manual play
+               is untouched - this lives only inside auto-shoot mode. */
+            if (g.player.specialTimer <= 0.0f &&
+                EnemiesNear(g.player.pos, 300.0f) >= 2) {
+                special = true;
+            }
+
             g_autoTarget    = best->pos;
             g_autoTargetOn  = true;
         }
@@ -815,7 +827,7 @@ static void UpdateGameCamera(float dt)
     camera.zoom     = g_camZoom;
     camera.rotation = 0.0f;
 
-    if (g.shake > 0.05f) {
+    if (gfx.shake && g.shake > 0.05f) {
         camera.target = V2(snapped.x + (float)GetRandomValue(-100, 100) * 0.01f * g.shake,
                            snapped.y + (float)GetRandomValue(-100, 100) * 0.01f * g.shake);
     } else {
@@ -1287,7 +1299,8 @@ static void DrawFrame(void)
         switch (g.state) {
             case STATE_PAUSED:   HudDrawPause();    break;
             case STATE_GAMEOVER: HudDrawGameOver(); break;
-            default:             HudDraw(camera);   ChatDraw(); break;
+            default:             HudDraw(camera);   ChatDraw();
+                                 HudDrawLevelBanner(); break;
         }
     }
 
@@ -1478,7 +1491,7 @@ static void HandleGlobalKeys(void)
 
             /* ...and so does the graphics panel. */
             if (gfxPanelMode) {
-                enum { GFX_ROWS = 11 };
+                enum { GFX_ROWS = 12 };
                 if (IsKeyPressed(KEY_G) || IsKeyPressed(KEY_ESCAPE) ||
                     IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT)) {
                     gfxPanelMode = 0;
@@ -1548,6 +1561,11 @@ static void HandleGlobalKeys(void)
                             break;
                         }
                         case 10: {
+                            /* screen shake: explosions jog the camera */
+                            gfx.shake = (gfx.shake == 1) ? 0 : 1;
+                            break;
+                        }
+                        case 11: {
                             static const int caps[] = { 0, 30, 60, 120, 144 };
                             int idx = 0;
                             for (int i = 0; i < 5; i++)

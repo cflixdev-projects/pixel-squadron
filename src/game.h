@@ -636,6 +636,7 @@ typedef struct {
     int vsync;      /* swap-block each monitor frame (desktop) */
     int msaa;       /* GPU anti-aliasing; applied next launch */
     int display;    /* 0 windowed, 1 borderless-fullscreen (desktop) */
+    int shake;      /* screen shake on explosions/hits */
 } Graphics;
 extern Graphics gfx;
 
@@ -722,6 +723,7 @@ void PlayerDraw(void);
 void PlayerDamage(float amount);
 /* The player's own ultimate, fired from the HUD meter. */
 void PlayerSpecial(void);
+int  EnemiesNear(Vector2 from, float radius);   /* how crowded is the sky here */
 /* JUNO's bubble: cast it, tick it, draw it. */
 void FieldCast(Ally *caster);
 void FieldUpdate(float dt);
@@ -793,6 +795,7 @@ void WaveSpawnStep(float dt);
  * ---------------------------------------------------------------------- */
 void DrawPixelNumber(long value, Vector2 pos, int digits, float scale, Color tint);
 void HudDraw(Camera2D cam);
+void HudDrawLevelBanner(void);   /* drawn after the chat, so it is never buried */
 void HudDrawGameOver(void);
 void HudDrawPause(void);
 void HudDrawTitle(void);

@@ -305,27 +305,8 @@ void HudDraw(Camera2D cam)
         }
     }
 
-    /* --- the wing's rearm banner --------------------------------------
-       Every other wave the wing gets measurably better. That is worth a
-       shout, because otherwise it just looks like they stopped dying. */
-    if (g.levelUpFlash > 0.0f) {
-        char up[40];
-        snprintf(up, sizeof up, "WINGMEN LEVEL %d", g.allyLevel + 1);
-
-        /* fade in over the first third of a second, hold, then fade out over
-           the last half second of the three */
-        float k = Clamp(g.levelUpFlash / 3.0f, 0.0f, 1.0f);
-        float a = (k > 0.9f) ? (1.0f - k) / 0.1f : Clamp(k * 6.0f, 0.0f, 1.0f);
-        a = Clamp(a, 0.0f, 1.0f);
-        float w = TextWidthPix(assets.font, up, 1);
-
-        DrawRectangle(0, 46, RENDER_W, 19, (Color){ 255, 186, 92, (unsigned char)(95.0f * a) });
-        DrawRectangle(0, 46, RENDER_W, 1,  (Color){ 255, 236, 159, (unsigned char)(230.0f * a) });
-        DrawRectangle(0, 64, RENDER_W, 1,  (Color){ 255, 236, 159, (unsigned char)(230.0f * a) });
-
-        Color c = { 255, 236, 159, (unsigned char)(255.0f * a) };
-        DrawTextPixShadow(assets.font, up, V2(floorf((RENDER_W - w) * 0.5f), 50), 1, c);
-    }
+    /* the level-up banner now draws after the chat (see HudDrawLevelBanner),
+       so a talkative squadron can never bury it */
 
     /* --- floating message --------------------------------------------- */
     if (g.messageTimer > 0.0f && g.message[0]) {
@@ -679,6 +660,35 @@ void HudDrawGameOver(void)
 }
 
 /* --------------------------------------------------------------------------
+ *  The wing's rearm banner
+ *
+ *  Every other wave the wing gets measurably better. That is worth a shout -
+ *  and it is drawn AFTER the chat and its bubbles, so a talkative squadron
+ *  can never bury it: the level-up is always on top.
+ * ----------------------------------------------------------------------- */
+void HudDrawLevelBanner(void)
+{
+    if (g.levelUpFlash <= 0.0f) return;
+
+    char up[40];
+    snprintf(up, sizeof up, "WINGMEN LEVEL %d", g.allyLevel + 1);
+
+    /* fade in over the first third of a second, hold, then fade out over
+       the last half second of the three */
+    float k = Clamp(g.levelUpFlash / 3.0f, 0.0f, 1.0f);
+    float a = (k > 0.9f) ? (1.0f - k) / 0.1f : Clamp(k * 6.0f, 0.0f, 1.0f);
+    a = Clamp(a, 0.0f, 1.0f);
+    float w = TextWidthPix(assets.font, up, 1);
+
+    DrawRectangle(0, 46, RENDER_W, 19, (Color){ 255, 186, 92, (unsigned char)(95.0f * a) });
+    DrawRectangle(0, 46, RENDER_W, 1,  (Color){ 255, 236, 159, (unsigned char)(230.0f * a) });
+    DrawRectangle(0, 64, RENDER_W, 1,  (Color){ 255, 236, 159, (unsigned char)(230.0f * a) });
+
+    Color c = { 255, 236, 159, (unsigned char)(255.0f * a) };
+    DrawTextPixShadow(assets.font, up, V2(floorf((RENDER_W - w) * 0.5f), 50), 1, c);
+}
+
+/* --------------------------------------------------------------------------
  *  Pause
  * ----------------------------------------------------------------------- */
 /* --------------------------------------------------------------------------
@@ -701,6 +711,7 @@ void HudDrawGraphics(int centre)
         { "VSYNC",      { "OFF", "ON", NULL, NULL } },
         { "AA (MSAA)",  { "OFF", "ON", NULL, NULL } },
         { "DISPLAY",    { "WINDOWED", "FULLSCREEN", NULL, NULL } },
+        { "SCREEN SHAKE", { "OFF", "ON", NULL, NULL } },
     };
     const int kRowsCount = (int)(sizeof kRows / sizeof kRows[0]);
     const int kTotal = kRowsCount + 1;   /* + fps cap */
@@ -740,6 +751,7 @@ void HudDrawGraphics(int centre)
                 case 8: value = kRows[8].options[gfx.msaa];         break;
                 case 9: value = kRows[9].options[gfx.display];      break;
 #endif
+                case 10: value = kRows[10].options[gfx.shake];      break;
                 default: value = ""; break;
             }
         } else if (fpsCap > 0) {
