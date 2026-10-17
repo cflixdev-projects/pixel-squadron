@@ -22,6 +22,8 @@ InputState input = {0};
 int fpsCap = 0;  /* 0 = uncapped */
 
 Graphics gfx = { .quality = 1, .bloom = 1, .scanlines = 0, .vignette = 1, .particles = 1 };
+bool    g_autoTargetOn = false;   /* auto-shoot: a target is being tracked */
+Vector2 g_autoTarget    = { 0, 0 };
 int gfxPanelMode = 0;   /* pause-menu graphics screen */
 int gfxPanelSel  = 0;
 
@@ -496,7 +498,10 @@ static void GatherInput(void)
         }
     }
 
-    /* --- auto-shoot takes over the guns, nothing else ---------------------*/
+    /* --- auto-shoot takes over the guns, nothing else ---------------------
+       the ship turns itself toward the nearest enemy and keeps firing; the
+       player only steers. The HUD can draw thanks to the exported target. */
+    g_autoTargetOn = false;
     if (autoShoot) {
         Enemy *best = NULL;
         float bestD = 430.0f * 430.0f;
@@ -509,6 +514,9 @@ static void GatherInput(void)
         if (best) {
             aim    = V2Norm(V2Sub(best->pos, g.player.pos));
             firing = true;
+
+            g_autoTarget    = best->pos;
+            g_autoTargetOn  = true;
         }
     }
 
@@ -547,9 +555,12 @@ static void GatherInput(void)
     if (!padMode) {
         /* Aim straight at the mouse: the direction from the screen centre to
            the cursor. No camera, no world space, no deadzone - the mouse
-           always wins here. */
-        Vector2 toMouse = V2Sub(mouseVirtual, V2(BASE_W * 0.5f, BASE_H * 0.5f));
-        if (V2Len(toMouse) > 1.0f) aim = V2Norm(toMouse);
+           always wins here. EXCEPT while auto-shoot has a target: then the
+           turret lock owns the aim and the (hidden) cursor has no say. */
+        if (!autoShoot || !g_autoTargetOn) {
+            Vector2 toMouse = V2Sub(mouseVirtual, V2(BASE_W * 0.5f, BASE_H * 0.5f));
+            if (V2Len(toMouse) > 1.0f) aim = V2Norm(toMouse);
+        }
     }
 
     /* A tapped button can go down and up between two frames. A press always

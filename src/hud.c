@@ -441,17 +441,37 @@ void HudDraw(Camera2D cam)
         }
     }
 
-    /* --- fps counter, bottom right, with a black box behind it. The cap
-       rides along, so cycling it with F shows up immediately. ------------- */
+    /* --- fps counter, bottom right, riding ONE row up from the edge (the
+       overhang of the old spot read badly next to the chip row). The box is
+       sized from the text plus padding, so it always covers it. ----------
+     */
     {
         char fpsBuf[24];
         if (fpsCap > 0) snprintf(fpsBuf, sizeof fpsBuf, "%d/%d FPS", GetFPS(), fpsCap);
         else            snprintf(fpsBuf, sizeof fpsBuf, "%d FPS FREE", GetFPS());
         float fw = TextWidthPix(assets.font, fpsBuf, 1);
-        DrawRectangle((int)(RENDER_W - fw - 8.0f), (int)(RENDER_H - 13.0f),
-                      (int)(fw + 6.0f), 11, (Color){ 0, 0, 0, 160 });
-        DrawTextPix(assets.font, fpsBuf, V2(RENDER_W - fw - 5.0f, RENDER_H - 11.0f), 1,
+
+        float bx = RENDER_W - fw - 14.0f;
+        float by = RENDER_H - 26.0f;
+        DrawRectangle((int)(bx - 5.0f), (int)(by - 3.0f),
+                      (int)(fw + 10.0f), 15, (Color){ 0, 0, 0, 170 });
+        DrawTextPix(assets.font, fpsBuf, V2(bx, by), 1,
                     (Color){ 200, 220, 240, 220 });
+    }
+
+    /* --- auto-shoot target ring ----------------------------------------
+       while the guns are running themselves, a small ring marks whichever
+       enemy they are pointed at, so the mode reads as a lock-on rather than
+       the ship just hollering into the void. */
+    if (input.autoAim && g_autoTargetOn) {
+        Vector2 sp = WorldToScreen(g_autoTarget);
+        if (sp.x > -20.0f && sp.x < RENDER_W + 20.0f &&
+            sp.y > -20.0f && sp.y < RENDER_H + 20.0f) {
+            DrawCircleLines((int)sp.x, (int)sp.y, 11.0f,
+                            (Color){ 120, 170, 250, 190 });
+            DrawCircleLines((int)sp.x, (int)sp.y, 13.0f,
+                            (Color){ 120, 170, 250, 90 });
+        }
     }
 
     /* --- damage vignette ---------------------------------------------- */

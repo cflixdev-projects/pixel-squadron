@@ -606,6 +606,8 @@ typedef struct {
 } Assets;
 
 extern int fpsCap;
+extern bool g_autoTargetOn;   /* auto-shoot is tracking a target */
+extern Vector2 g_autoTarget;  /* ...and this is where it is      */
 
 /* Renderer quality knobs, all reachable from the pause menu's graphics
    panel and persisted across sessions. */
