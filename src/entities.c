@@ -439,6 +439,7 @@ void EntitiesReset(void)
        up to three more seats mid-run, so only the first three slots start
        alive here. */
     g_devWingCount = 3;
+    g_camZoom      = 1.0f;   /* every run opens at the default view */
     for (int i = 0; i < MAX_ALLIES; i++) {
         g.allies[i] = (Ally){
             .alive        = (i < 3),
@@ -540,6 +541,7 @@ bool g_slowMo     = false;
 char g_devInput[DEV_CMD_MAX]   = "";
 char g_devHistory[DEV_HIST_LINES][DEV_CMD_MAX] = { "" };
 int  g_devWingCount = 3;
+float g_camZoom    = 1.0f;
 
 static void DevScroll(const char *line)
 {

@@ -525,6 +525,19 @@ static void GatherInput(void)
         g.messageTimer = 1.2f;
     }
 
+    /* --- view zoom ---------------------------------------------------------
+       The wheel leans the camera in and out - up zooms in, down lets you see
+       more country - but it cannot run away: there is a hard floor and a
+       ceiling so the picture always stays playable. R puts the default view
+       back; the same works on a fresh run, which always opens at zoom 1. */
+    {
+        float wheel = GetMouseWheelMove();
+        if (wheel != 0.0f) {
+            g_camZoom = Clamp(g_camZoom + wheel * 0.10f, ZOOM_MIN, ZOOM_MAX);
+        }
+        if (IsKeyPressed(KEY_R)) g_camZoom = 1.0f;
+    }
+
     /* --- the special carousel -------------------------------------------
        Every special move in the squadron - the player's own shockwave and
        the wingmen's vitamins - sits in one pool. One is loaded at a time,
@@ -722,7 +735,7 @@ static void UpdateGameCamera(float dt)
     Vector2 snapped = V2(floorf(cameraPos.x), floorf(cameraPos.y));
 
     camera.offset   = V2(RENDER_W * 0.5f, RENDER_H * 0.5f);
-    camera.zoom     = 1.0f;
+    camera.zoom     = g_camZoom;
     camera.rotation = 0.0f;
 
     if (g.shake > 0.05f) {
@@ -733,12 +746,12 @@ static void UpdateGameCamera(float dt)
     }
 }
 
-/* World position as it lands on the virtual screen. The camera is always
- * zoom 1 with no rotation, so this is a plain translate - but it goes through
- * the camera so the bubbles track the screen exactly as the ships do. */
+/* World position as it lands on the virtual screen. This is the same maths
+ * the camera matrix does - the zoom leans on the wheel, so it rides along
+ * here too, keeping bubbles and lock rings glued to their ships. */
 Vector2 WorldToScreen(Vector2 world)
 {
-    return V2Add(V2Sub(world, camera.target), camera.offset);
+    return V2Add(V2Scale(V2Sub(world, camera.target), camera.zoom), camera.offset);
 }
 
 /* --------------------------------------------------------------------------

@@ -641,6 +641,10 @@ extern char g_devInput[DEV_CMD_MAX];   /* line being typed               */
 extern char g_devHistory[DEV_HIST_LINES][DEV_CMD_MAX]; /* last answers   */
 extern int  g_devWingCount;            /* live wingman slots (HUD)       */
 
+#define ZOOM_MIN 0.60f                 /* wheel zoom-out limit            */
+#define ZOOM_MAX 2.00f                 /* wheel zoom-in limit             */
+extern float g_camZoom;                /* world camera scale (R resets)   */
+
 void DevConsoleToggle(void);           /* T - open/close the cheat box   */
 void DevConsoleFeed(void);             /* while it is open: key handling */
 void DevSpawnWingmen(int n);           /* open n seats, 0..MAX_ALLIES    */

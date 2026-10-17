@@ -100,6 +100,8 @@ your three wingmen, who chat, bicker and (usually) have your back.
 | Start | `Enter` / `Space` | `A` / `Start` |
 | Move | `W` `A` `S` `D` / arrow keys | Left stick |
 | Aim | Mouse | Right stick |
+| Zoom the view | Mouse wheel (in/out, limited) | - |
+| Reset the view | `R` | - |
 | Fire | `LMB` / `Space` | `RT` |
 | Boost | `Shift` | `B` |
 | Recall the wing | `Q` | `X` |
