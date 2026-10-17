@@ -221,7 +221,7 @@ void HudDraw(Camera2D cam)
     /* --- auto-shoot badge: bottom left, just above the meters, so the
        score panel on the right stays clear of clutter -------------------- */
     if (input.autoAim) {
-        DrawPanel((Rectangle){ 6, RENDER_H - 66, 92, 16 });
+        DrawPanel((Rectangle){ 6, RENDER_H - 66, 92, 21 });
         DrawTextPix(assets.font, "AUTO-SHOOT", V2(11, RENDER_H - 63), 1,
                     (Color){ 140, 235, 150, 235 });
     }
@@ -319,12 +319,12 @@ void HudDraw(Camera2D cam)
         a = Clamp(a, 0.0f, 1.0f);
         float w = TextWidthPix(assets.font, up, 1);
 
-        DrawRectangle(0, 50, RENDER_W, 19, (Color){ 255, 186, 92, (unsigned char)(95.0f * a) });
-        DrawRectangle(0, 50, RENDER_W, 1,  (Color){ 255, 236, 159, (unsigned char)(230.0f * a) });
-        DrawRectangle(0, 68, RENDER_W, 1,  (Color){ 255, 236, 159, (unsigned char)(230.0f * a) });
+        DrawRectangle(0, 46, RENDER_W, 19, (Color){ 255, 186, 92, (unsigned char)(95.0f * a) });
+        DrawRectangle(0, 46, RENDER_W, 1,  (Color){ 255, 236, 159, (unsigned char)(230.0f * a) });
+        DrawRectangle(0, 64, RENDER_W, 1,  (Color){ 255, 236, 159, (unsigned char)(230.0f * a) });
 
         Color c = { 255, 236, 159, (unsigned char)(255.0f * a) };
-        DrawTextPixShadow(assets.font, up, V2(floorf((RENDER_W - w) * 0.5f), 54), 1, c);
+        DrawTextPixShadow(assets.font, up, V2(floorf((RENDER_W - w) * 0.5f), 50), 1, c);
     }
 
     /* --- floating message --------------------------------------------- */
