@@ -959,7 +959,7 @@ int main(int argc, char **argv)
        FLAG_WINDOW_RESIZABLE set hands that sizing to raylib's own resize
        callback, which pins the canvas to the browser viewport, and there is no
        monitor to fit or to take over either: the browser owns fullscreen. */
-    SetConfigFlags(FLAG_VSYNC_HINT | FLAG_MSAA_4X_HINT | FLAG_WINDOW_RESIZABLE);
+    SetConfigFlags(FLAG_MSAA_4X_HINT | FLAG_WINDOW_RESIZABLE);
     InitWindow(BASE_W * 3, BASE_H * 3, "Pixel Squadron - raylib twin-stick shooter");
     InitAudioDevice();
 #else

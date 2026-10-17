@@ -192,9 +192,9 @@ static float Fbm(float x, float y, unsigned seed, int octaves)
  * ----------------------------------------------------------------------- */
 static float TileHeight(int tx, int ty)
 {
-    float cont  = Fbm(tx * 0.0230f, ty * 0.0230f, s_seed, 3);
-    float ridge = Fbm(tx * 0.0550f, ty * 0.0550f, s_seed + 7717u, 2);
-    float micro = ValueNoise(tx * 0.180f, ty * 0.180f, s_seed + 991u);
+    float cont  = Fbm(tx * 0.0230f, ty * 0.0230f, s_seed, 2);
+    float ridge = Fbm(tx * 0.0550f, ty * 0.0550f, s_seed + 7717u, 1);
+    float micro = 0.5f;  /* skip micro detail for performance */
 
     return 0.470f
          + (cont  - 0.5f) * 1.75f
@@ -477,10 +477,10 @@ void ArenaDraw(Camera2D cam)
     float halfW = RENDER_W * 0.5f / cam.zoom;
     float halfH = RENDER_H * 0.5f / cam.zoom;
 
-    int x0 = (int)floorf((cam.target.x - halfW) / TILE_SIZE) - 2;
-    int y0 = (int)floorf((cam.target.y - halfH) / TILE_SIZE) - 2;
-    int x1 = (int)ceilf((cam.target.x + halfW) / TILE_SIZE) + 2;
-    int y1 = (int)ceilf((cam.target.y + halfH) / TILE_SIZE) + 2;
+    int x0 = (int)floorf((cam.target.x - halfW) / TILE_SIZE) - 1;
+    int y0 = (int)floorf((cam.target.y - halfH) / TILE_SIZE) - 1;
+    int x1 = (int)ceilf((cam.target.x + halfW) / TILE_SIZE) + 1;
+    int y1 = (int)ceilf((cam.target.y + halfH) / TILE_SIZE) + 1;
 
     int nx = x1 - x0 + 1;
     int ny = y1 - y0 + 1;
@@ -570,6 +570,7 @@ void ArenaDraw(Camera2D cam)
     /* --- pass 3: cover ---------------------------------------------- */
     for (int j = 0; j < ny; j++) {
         for (int i = 0; i < nx; i++) {
+            if (s_view[j][i].terrain == TER_WATER) continue;
             int sprite = DecorSprite(s_view[j][i].decor, s_view[j][i].biome);
             if (sprite < 0) continue;
 
