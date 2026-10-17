@@ -32,9 +32,18 @@ your three wingmen, who chat, bicker and (usually) have your back.
 - **Recall** - press `Q` and the whole wing breaks off, sprints back and fights
   on station around you until the danger has passed. They shoot the entire way
   home, so a recall is backup, not a hug.
-- **Your own ultimate** - press `E` for **OVERSURGE**: a radial blast that
-  shoves everything nearby, shreds it, wipes enemy fire out of the air and
-  leaves you untouchable for a beat. The HUD meter shows when it is back.
+- **Your own special-move pool** - every special in the squadron, your own
+  **OVERSURGE** shockwave and the wingmen's moves, sits in one pool and only
+  one is loaded at a time. `TAB` (or `1`-`8`) picks the move, `E` fires it,
+  and each move reloads at its own pace depending on how strong it is. On a
+  pad the D-pad cycles the bag and `Y` fires it.
+- **Auto-shoot mode** - press `V` (`A` on the pad) and the guns take over:
+  the aim snaps to the nearest enemy and keeps firing while you concentrate on
+  flying and timing specials. A badge on the HUD says when it is on; press it
+  again to go back to manual.
+- **Mute the chat bubbles** - `H` (`BACK` on the pad) switches the speech
+  bubbles over the wingmen off and on, without touching the message log down
+  the right-hand side.
 - **Five biomes** across the endless map: verdant isles, dust reach, frost
   shelf, ash barrens and deep verge. Each has its own palette, waterline,
   wildlife and hazards, and they blend into one another at the borders. The
@@ -75,19 +84,25 @@ your three wingmen, who chat, bicker and (usually) have your back.
 | Fire | `LMB` / `Space` | `RT` |
 | Boost | `Shift` | `B` |
 | Recall the wing | `Q` | `X` |
-| Ultimate (OVERSURGE) | `E` | `Y` |
+| Special pool: load a move | `TAB` or `1`-`8` | D-pad (cycles) |
+| Special pool: fire it | `E` | `Y` |
+| Auto-shoot toggle | `V` | `A` |
+| Chat bubbles toggle | `H` | `Back` |
+| Cap the fps | `F` (free/30/60/120/144) | - |
 | Rebind the pad | `C` (from the pause menu) | - |
 | Pause | `P` / `Esc` | `Start` |
 | Fullscreen | `F11` | - |
 | Mute | `M` | - |
 | Quit | `Esc` (from the title, pause or end screen) | - |
 
-In flight the OS cursor is replaced by the game's own reticle, which sits
-exactly where the aim point is: what is inside the box is what you hit. On a
-pad the reticle rides out along the aim vector instead, so it is just as
-obvious where the guns are pointed. Pushing the right stick aims and opens
-fire; moving the mouse takes the aim straight back, so both hands work and
-neither steals the crosshair from the other.
+In flight the OS cursor is replaced by the game's own reticle, drawn in the
+player's ship colours (steel blue over gunmetal white) with fixed sizes, so it
+is stable to read against any biome: no pulsing, no colour shifts. On a pad it
+rides out along the aim vector instead, so it is just as obvious where the guns
+are pointed. The sticks only steer and aim - nothing on the pad fires except
+the button bound to FIRE (the right trigger by default), so turning to look at
+something never starts a fight. Moving the mouse takes the aim straight back,
+so both hands work and neither steals the crosshair from the other.
 
 The pause menu's **pad controls** panel (`C`) rebinds fire, boost, recall and the ultimate to any pad button; `R` there restores the defaults and
 `Esc` / `C` / `Start` closes it. The keyboard is not remappable - there are

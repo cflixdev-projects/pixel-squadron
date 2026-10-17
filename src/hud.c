@@ -118,9 +118,11 @@ static void DrawWingmanRow(int i, float y)
     }
     DrawRectangleLinesEx(bar, 1.0f, (Color){ 223, 246, 245, 70 });
 
-    /* special-weapon pip: lit when the special is charged and ready */
+    /* special-weapon pip: lit when the special is charged and ready. The
+       cooldown is the one of whichever move the pilot has loaded right
+       now - the wing rotates through its own bag. */
     float ready = a->alive
-                ? Clamp(1.0f - a->specialTimer / pr->cooldown, 0.0f, 1.0f)
+                ? Clamp(1.0f - a->specialTimer / AllySpecialCooldown(a), 0.0f, 1.0f)
                 : 0.0f;
 
     Rectangle pip = { 107.0f, y + 2.0f, 5.0f, 5.0f };
@@ -144,7 +146,7 @@ static void DrawWingmanRow(int i, float y)
                           (unsigned char)(250.0f - 5.0f * namePulse),
                           (unsigned char)(120.0f + 135.0f * namePulse) }
                : (Color){ 74, 92, 110, 255 };
-    DrawTextPix(assets.font, pr->special, V2(118.0f, y), 1, spec);
+    DrawTextPix(assets.font, AllySpecialName(a), V2(118.0f, y), 1, spec);
 }
 
 void HudDraw(Camera2D cam)
@@ -202,10 +204,21 @@ void HudDraw(Camera2D cam)
     DrawTextPixShadow(assets.font, biome, V2(floorf((RENDER_W - biomeW) * 0.5f), 30), 1,
                       (Color){ 168, 196, 204, 200 });
 
+    /* --- auto-shoot badge, top right corner --------------------------- */
+    if (input.autoAim) {
+        const char *t = "AUTO-SHOOT";
+        float w = TextWidthPix(assets.font, t, 1) + 10.0f;
+        DrawRectangle((int)(RENDER_W - w - 6.0f), 6, (int)w, 13,
+                      (Color){ 10, 46, 24, 210 });
+        DrawTextPix(assets.font, t, V2(RENDER_W - w - 1.0f, 9), 1,
+                    (Color){ 140, 235, 150, 255 });
+    }
+
     /* --- boost, recall and ultimate meters, bottom left --------------- */
     char rallyLabel[32], specialLabel[32];
     snprintf(rallyLabel,   sizeof rallyLabel,   "RALLY Q/%s",   BindName(BIND_RECALL));
-    snprintf(specialLabel, sizeof specialLabel, "BLAST E/%s",   BindName(BIND_SPECIAL));
+    snprintf(specialLabel, sizeof specialLabel, "SP: %s E/%s",
+             PlayerSpecialName(g.player.specialSel), BindName(BIND_SPECIAL));
 
     /* The pad button in the label can be as long as two characters, so the
        three meters are laid out from their measured widths rather than from
@@ -216,12 +229,16 @@ void HudDraw(Camera2D cam)
     float rx = bx + bw + 12.0f;
     float rw = fmaxf(72.0f, TextWidthPix(assets.font, rallyLabel,    1));
     float sx = rx + rw + 12.0f;
-    float sw = fmaxf(72.0f, TextWidthPix(assets.font, specialLabel,  1));
+    /* long names such as STING BARRAGE get a wider box; the 72px floor
+       keeps the three meters at an even pitch */
+    float sw = fmaxf(88.0f, TextWidthPix(assets.font, specialLabel,  1));
 
     float y = RENDER_H - 30.0f;
 
     /* Boost is a core control, so its meter is always on. */
-    DrawTextPixShadow(assets.font, boostLabel, V2(bx, y), 1, COL_SHALLOW);
+    /* boost is the "panic" pedal: label it in alarm red so it reads at a
+       glance in a crowded corner */
+    DrawTextPixShadow(assets.font, boostLabel, V2(bx, y), 1, (Color){ 255, 74, 74, 255 });
     DrawTimerBar((Rectangle){ bx, y + 13, bw, 5 }, p->boostFuel / PLAYER_BOOST_FUEL,
                  (Color){ 255, 236, 159, 230 });
 
@@ -234,13 +251,13 @@ void HudDraw(Camera2D cam)
                  rallyReady ? (Color){ 126, 226, 250, 230 }
                             : (Color){ 90, 122, 152, 220 });
 
-    /* ...and the player's own ultimate. */
+    /* ...and the player's own ultimate (whichever move is loaded). */
     bool blastReady = (p->specialTimer <= 0.0f);
     DrawTextPixShadow(assets.font, specialLabel, V2(sx, y), 1,
                       blastReady ? (Color){ 255, 186, 92, 255 }
                                  : (Color){ 96, 116, 134, 255 });
     DrawTimerBar((Rectangle){ sx, y + 13, sw, 5 },
-                 1.0f - p->specialTimer / SPECIAL_COOLDOWN,
+                 1.0f - p->specialTimer / PlayerSpecialCooldown(g.player.specialSel),
                  blastReady ? (Color){ 255, 186, 92, 230 }
                             : (Color){ 90, 122, 152, 220 });
 
@@ -388,34 +405,45 @@ void HudDraw(Camera2D cam)
             aimAt = WorldToScreen(V2Add(p->pos, V2Scale(ray, 54.0f)));
         }
 
-        /* Warm halo + star outburst, kept compact so it reads as a sight. */
+        /* A calm sight in the squadron's own colours - the player's ship is
+           steel blue over gunmetal white, so the reticle is too. Fixed
+           sizes and alpha: nothing on it breathes, so it is easy to read
+           against any biome at any zoom. */
         {
-            float pulse = 0.5f + 0.5f * sinf(g.timer * 4.0f);
-            /* soft warm glow */
-            DrawCircleV(aimAt, 9.0f + pulse * 2.0f, (Color){ 245, 200, 140, 30 });
-            DrawCircleV(aimAt, 6.0f + pulse * 1.0f, (Color){ 245, 200, 140, 50 });
-            /* star outburst: 4 long rays + 4 short diagonals */
-            for (int i = 0; i < 8; i++) {
-                float ang = (float)i * 45.0f * DEG2RAD;
-                float len = (i % 2 == 0) ? 10.0f : 6.0f;
-                Vector2 tip = V2Add(aimAt, V2(cosf(ang) * len, sinf(ang) * len));
-                DrawLineEx(aimAt, tip, 1.2f, (Color){ 245, 200, 140, (unsigned char)(140 + 60 * pulse) });
+            Color blue = { 120, 170, 250, 255 };
+            Color steel = { 214, 224, 240, 255 };
+
+            /* soft blue halo, drawn once, never animated */
+            DrawCircleV(aimAt, 9.0f, (Color){ 120, 170, 250, 24 });
+            DrawCircleV(aimAt, 6.0f, (Color){ 120, 170, 250, 40 });
+
+            /* crosshair ticks, gunmetal white */
+            DrawLineEx(V2(aimAt.x - 4, aimAt.y), V2(aimAt.x - 10, aimAt.y), 1.0f, steel);
+            DrawLineEx(V2(aimAt.x + 4, aimAt.y), V2(aimAt.x + 10, aimAt.y), 1.0f, steel);
+            DrawLineEx(V2(aimAt.x, aimAt.y - 4), V2(aimAt.x, aimAt.y - 10), 1.0f, steel);
+            DrawLineEx(V2(aimAt.x, aimAt.y + 4), V2(aimAt.x, aimAt.y + 10), 1.0f, steel);
+
+            /* four short diagonal ticks, steel blue - a diamond inside the
+               ticks, echoing the ship itself */
+            for (int i = 0; i < 4; i++) {
+                float ang = 45.0f + 90.0f * (float)i;
+                Vector2 tip = V2Add(aimAt, V2(cosf(ang * DEG2RAD) * 6.0f,
+                                              sinf(ang * DEG2RAD) * 6.0f));
+                DrawLineEx(aimAt, tip, 1.0f, blue);
             }
-            /* crosshair ticks */
-            DrawLineEx(V2(aimAt.x - 4, aimAt.y), V2(aimAt.x - 10, aimAt.y), 1.0f, (Color){ 255, 240, 210, 180 });
-            DrawLineEx(V2(aimAt.x + 4, aimAt.y), V2(aimAt.x + 10, aimAt.y), 1.0f, (Color){ 255, 240, 210, 180 });
-            DrawLineEx(V2(aimAt.x, aimAt.y - 4), V2(aimAt.x, aimAt.y - 10), 1.0f, (Color){ 255, 240, 210, 180 });
-            DrawLineEx(V2(aimAt.x, aimAt.y + 4), V2(aimAt.x, aimAt.y + 10), 1.0f, (Color){ 255, 240, 210, 180 });
-            /* bright red center dot */
-            DrawCircleV(aimAt, 2.0f, (Color){ 255, 80, 60, 240 });
-            DrawCircleV(aimAt, 1.0f, (Color){ 255, 200, 180, 255 });
+
+            /* centre: blue ring with a white pip */
+            DrawCircleV(aimAt, 2.0f, blue);
+            DrawCircleV(aimAt, 1.0f, (Color){ 224, 232, 246, 255 });
         }
     }
 
-    /* --- fps counter, bottom right, with a black box behind it ---------- */
+    /* --- fps counter, bottom right, with a black box behind it. The cap
+       rides along, so cycling it with F shows up immediately. ------------- */
     {
-        char fpsBuf[16];
-        snprintf(fpsBuf, sizeof fpsBuf, "%d FPS", GetFPS());
+        char fpsBuf[24];
+        if (fpsCap > 0) snprintf(fpsBuf, sizeof fpsBuf, "%d/%d FPS", GetFPS(), fpsCap);
+        else            snprintf(fpsBuf, sizeof fpsBuf, "%d FPS FREE", GetFPS());
         float fw = TextWidthPix(assets.font, fpsBuf, 1);
         DrawRectangle((int)(RENDER_W - fw - 8.0f), (int)(RENDER_H - 13.0f),
                       (int)(fw + 6.0f), 11, (Color){ 0, 0, 0, 160 });
@@ -635,8 +663,10 @@ void HudDrawPause(void)
                      centre + 14, 1, assets.font, (Color){ 126, 226, 250, 160 });
     DrawTextCentered("LMB / RT - FIRE    SHIFT / B - BOOST",
                      centre + 28, 1, assets.font, (Color){ 126, 226, 250, 160 });
-    DrawTextCentered("Q / X - RECALL    E / Y - BLAST    C - PAD CONTROLS",
+    DrawTextCentered("Q/X RECALL   E/Y SPECIAL   TAB OR 1-8 LOAD ONE",
                      centre + 42, 1, assets.font, (Color){ 126, 226, 250, 160 });
-    DrawTextCentered("F - CYCLE FPS CAP (30/60/120/144/OFF)",
-                      centre + 56, 1, assets.font, (Color){ 126, 226, 250, 120 });
+    DrawTextCentered("V - AUTO-SHOOT     H - CHAT POPUPS     C - PAD CONTROLS",
+                     centre + 56, 1, assets.font, (Color){ 126, 226, 250, 160 });
+    DrawTextCentered("F - FPS CAP  FREE/30/60/120/144  (SHOWN IN COUNTER)",
+                      centre + 70, 1, assets.font, (Color){ 126, 226, 250, 120 });
 }

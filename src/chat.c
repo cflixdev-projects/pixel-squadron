@@ -458,6 +458,9 @@ void ChatDraw(void)
 
     for (int i = 0; i < MAX_ALLIES; i++) {
         ChatLine *c = LineOf(i);
-        if (c) DrawBubble(i, c);
+        /* the radio log on the right stays; only the bubbles overhead can
+           be switched off, when the screen starts to matter more than the
+           banter */
+        if (c && input.chatPopups) DrawBubble(i, c);
     }
 }

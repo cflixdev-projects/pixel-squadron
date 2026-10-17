@@ -250,6 +250,7 @@ typedef struct {
     float hitFlash;
     float boostFuel;   /* seconds of boost left (0..PLAYER_BOOST_FUEL) */
     float specialTimer;/* counts down to the next special attack      */
+    int   specialSel;  /* which special move is loaded from the pool  */
     float quadTimer;   /* weapon crates that are running right now    */
     float spreadTimer;
     float homingTimer;
@@ -327,6 +328,7 @@ typedef struct {
     int     slot;          /* formation slot, also the HUD column */
     int     role;          /* AllyRole */
     float   specialTimer;  /* counts down to the next special attack */
+    int     specialSel;    /* which special from their own bag is up */
     float   specialFlash;  /* >0 for a moment after the special fires */
     float   distress;      /* >0 while calling for help (drives the beacon) */
     float   helpCool;      /* quiet period between two calls for help */
@@ -339,6 +341,15 @@ typedef struct {
     float   spreadTimer;
     float   homingTimer;
 } Ally;
+
+/* The shared special-move pool. Every pilot - the player and the wingmen -
+   draws from one table: each move has its own name and its own cooldown,
+   scaled to how strong it is, and anyone can only ever have one loaded. */
+int         PlayerSpecialCount(void);
+const char *PlayerSpecialName(int idx);
+float       PlayerSpecialCooldown(int idx);
+const char *AllySpecialName(const Ally *a);
+float       AllySpecialCooldown(const Ally *a);
 
 typedef struct {
     bool alive;
@@ -427,6 +438,8 @@ typedef struct {
     bool rally;           /* Q / left shoulder - call the wing home   */
     bool special;         /* the player's own ultimate                */
     bool usingGamepad;
+    bool autoAim;         /* auto-shoot mode is toggled on   */
+    bool chatPopups;      /* chat speech bubbles shown       */
 } InputState;
 
 extern InputState input;
@@ -592,6 +605,7 @@ typedef struct {
     Sound engine;
 } Assets;
 
+extern int fpsCap;
 extern Assets assets;
 
 void AssetsLoad(void);

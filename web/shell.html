@@ -30,18 +30,36 @@
     height: 100vh !important;
   }
 
-  /* Only ever seen while the wasm is downloading - it fades out on its own. */
+  /* Only ever seen while the wasm is downloading - it fades out on its own.
+     restyle: the page keeps the game's own warm palette (rust, sand, steel
+     blue) so the load screen feels like the hangar, not a terminal. */
   #overlay {
     position: fixed; inset: 0; z-index: 10;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 18px; background: #0a1016; transition: opacity .35s ease;
+    gap: 18px; background: #1a1210; transition: opacity .35s ease;
   }
   #overlay.hidden { opacity: 0; pointer-events: none; }
 
-  #title { font-size: 26px; letter-spacing: 8px; color: #7ee2fa; }
-  #bar { width: 260px; height: 8px; border: 1px solid #29506a; background: #101c26; }
-  #bar > i { display: block; height: 100%; width: 0%; background: #7ee2fa; transition: width .2s ease; }
-  #msg { font-size: 13px; color: #7d9db0; }
+  #title {
+    font-size: 30px; letter-spacing: 9px; color: #ffba5c;
+    text-shadow: 0 0 1px #ffd08a, 2px 2px 0 #4a2415;
+  }
+  #hangar {
+    font-size: 12px; letter-spacing: 2px; color: #c9a37a;
+  }
+  #bar {
+    width: 260px; height: 10px; border: 1px solid #7a5a3a; background: #241814;
+    box-shadow: 0 0 0 1px #120b08;
+  }
+  #bar > i {
+    display: block; height: 100%; width: 0%;
+    background: repeating-linear-gradient(90deg,
+      #ffba5c 0 6px, #f49a3c 6px 12px);
+    transition: width .2s ease;
+  }
+  #msg { font-size: 12px; color: #b08a68; }
+  /* a little formation of three ships idling across the loading text */
+  #squad { font-size: 14px; color: #7fb4e8; letter-spacing: 6px; }
 </style>
 </head>
 <body>
@@ -49,8 +67,10 @@
 
   <div id="overlay">
     <div id="title">PIXEL SQUADRON</div>
+    <div id="squad">&#9679; &#9679; &#9679;</div>
     <div id="bar"><i id="prog"></i></div>
-    <div id="msg">loading&hellip;</div>
+    <div id="msg">fueling up&hellip;</div>
+    <div id="hangar">HANGAR 7 &mdash; SQUADRON ASSEMBLING</div>
   </div>
 
   <script>

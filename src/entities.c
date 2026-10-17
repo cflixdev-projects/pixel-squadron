@@ -454,51 +454,300 @@ static PickupKind RandomWeaponCrate(void)
  *  answer to being boxed in, and it is on a long enough leash that it cannot
  *  be the answer to everything else as well.
  * ----------------------------------------------------------------------- */
+/* --------------------------------------------------------------------------
+ *  The special-move pool
+ *
+ *  One table, shared by every pilot. Each move has its own name and its own
+ *  cooldown, scaled to how strong the move is: a heavy dome costs more of the
+ *  pilot's attention than a quick spray of seekers. The player pulls from the
+ *  whole pool; the wingmen pick from their own bag and rotate through it, so
+ *  the same pilot is never a one-trick pony.
+ * ----------------------------------------------------------------------- */
+enum {
+    SP_OVERSURGE = 0,   /* the player's shockwave                          */
+    SP_BROADSIDE,       /* VEX: ring of shot, both airlocks                 */
+    SP_NOVALANCE,       /* VEX: three heavy forward bolts                   */
+    SP_IRONRAIN,        /* VEX: fast forward cone of shot                   */
+    SP_AEGIS,           /* JUNO: dome + twin shot                           */
+    SP_TRIAGE,          /* JUNO: heal the squadron, hand out a crate        */
+    SP_SWARM,           /* BIT: slow, patient seekers                       */
+    SP_STING,           /* BIT: quick, short-range homing volley            */
+    SPECIAL_KIND_COUNT
+};
+
+typedef struct {
+    const char *name;
+    float cooldown;
+} SpecialDef;
+
+static const SpecialDef kSpecials[SPECIAL_KIND_COUNT] = {
+    { "OVERSURGE",     15.0f },
+    { "BROADSIDE",      9.0f },
+    { "NOVA LANCE",     8.0f },
+    { "IRON RAIN",      6.0f },
+    { "AEGIS FIELD",   16.0f },
+    { "TRIAGE PULSE",  10.0f },
+    { "WASP SWARM",    11.0f },
+    { "STING BARRAGE",  7.0f },
+};
+
+/* Which moves each pilot has in the bag. -1 ends the list. */
+static const int kRoleSpecials[ALLY_ROLE_COUNT][3] = {
+    { SP_BROADSIDE, SP_NOVALANCE, SP_IRONRAIN },
+    { SP_AEGIS,     SP_TRIAGE,    -1 },
+    { SP_SWARM,     SP_STING,     -1 },
+};
+
+static int RoleSpecial(int role, int sel)
+{
+    if (role < 0 || role >= ALLY_ROLE_COUNT) role = 0;
+    int v = (sel >= 0 && sel < 3) ? kRoleSpecials[role][sel] : -1;
+    if (v < 0) v = kRoleSpecials[role][0];
+    return v;
+}
+
+static int RoleSpecialCount(int role)
+{
+    int n = 0;
+    for (int i = 0; i < 3; i++)
+        if (kRoleSpecials[role][i] >= 0) n++;
+    return n;
+}
+
+/* After a special fires, the pilot reloads something else at random. */
+static void RoleNextSpecial(Ally *a)
+{
+    int opts[3], n = 0;
+    for (int i = 0; i < 3; i++)
+        if (kRoleSpecials[a->role][i] >= 0 && i != a->specialSel) opts[n++] = i;
+    if (n > 0) a->specialSel = opts[GetRandomValue(0, n - 1)];
+}
+
+static float AllyGunMul(const Ally *a);
+
+static void RunSpecial(Ally *a, int tag)
+{
+    Player *p = &g.player;
+    Vector2 at   = a ? a->pos   : p->pos;
+    float   ang  = a ? a->angle : p->angle;
+    int     slot = a ? a->slot : -1;
+    const AllyProfile *pr   = a ? AllyProfileOf(a->role) : NULL;
+    Color   paint = a ? pr->hull : (Color){ 140, 180, 255, 255 };
+    Vector2 dir   = V2(cosf(ang), sinf(ang));
+    Vector2 side  = V2(-dir.y, dir.x);
+
+    char msg[40];
+
+    switch (tag) {
+        /* -------------------------------------------------- OVERSURGE ----
+           The squadron signature: a shockwave. Enemies get shoved off their
+           feet and hurt, their bullets disintegrate mid-air. */
+        case SP_OVERSURGE: {
+            for (int i = 0; i < MAX_ENEMIES; i++) {
+                Enemy *e = &g.enemies[i];
+                if (!e->alive || e->spawnFade > 0.0f) continue;
+
+                float d = Dist2(e->pos, at);
+                if (d > SPECIAL_RADIUS * SPECIAL_RADIUS) continue;
+
+                Vector2 push = V2Sub(e->pos, at);
+                float   len  = V2Len(push);
+                Vector2 n    = (len > 0.001f) ? V2Scale(push, 1.0f / len)
+                                              : V2(1.0f, 0.0f);
+                e->vel = V2Add(e->vel, V2Scale(n, 340.0f));
+                DamageEnemy(e, SPECIAL_DAMAGE * (1.0f - 0.6f * (len / SPECIAL_RADIUS)));
+            }
+
+            /* sweep the enemy fire out of the air */
+            float sweep = SPECIAL_RADIUS * 1.2f;
+            for (int i = 0; i < MAX_BULLETS; i++) {
+                Bullet *b = &g.bullets[i];
+                if (!b->alive || b->owner == BULLET_PLAYER ||
+                    b->owner == BULLET_ALLY) continue;
+                if (Dist2(b->pos, at) > sweep * sweep) continue;
+
+                b->alive = false;
+                SpawnBurstParticles(b->pos, 0.22f, paint);
+            }
+
+            if (!a) p->shieldTimer = fmaxf(p->shieldTimer, SPECIAL_SHIELD);
+
+            SpawnBurst(at, 2.6f);
+            SpawnBurstParticles(at, 2.4f, paint);
+            g.shake   = fmaxf(g.shake, 14.0f);
+            g.hitStop = fmaxf(g.hitStop, 0.05f);
+            if (a) { snprintf(msg, sizeof msg, "%s - OVERSURGE", pr->name); }
+            else   { snprintf(msg, sizeof msg, "OVERSURGE"); }
+            TextCopy(g.message, msg);
+            g.messageTimer = 1.6f;
+            PlaySfx(assets.explosionBig, 0.55f, 0.72f);
+            break;
+        }
+
+        /* ------------------------------------------------- BROADSIDE ----
+           VEX has no patience for a neat firing line: she dumps a ring of
+           shot out of both airlocks at once. */
+        case SP_BROADSIDE: {
+            for (int i = 0; i < 12; i++) {
+                float a2 = ang + (float)i * 30.0f * DEG2RAD;
+                Vector2 d = V2(cosf(a2), sinf(a2));
+                SpawnBullet(V2Add(at, V2Scale(d, 10.0f)),
+                            V2Scale(d, ALLY_BULLET_SPD * 0.72f),
+                            TILE_BOLT, ALLY_BULLET_DMG * 0.75f * AllyGunMul(a),
+                            1.6f, 0.55f, BULLET_ALLY, slot);
+            }
+            for (int i = 0; i < 10; i++) {
+                float a2 = (float)i * 36.0f * DEG2RAD;
+                Vector2 d = V2(cosf(a2), sinf(a2));
+                SpawnBurstParticles(V2Add(at, V2Scale(d, 13.0f)), 0.28f, paint);
+            }
+            g.shake = fmaxf(g.shake, 4.0f);
+            snprintf(msg, sizeof msg, a ? "%s - BROADSIDE" : "BROADSIDE", a ? pr->name : "");
+            TextCopy(g.message, msg);
+            g.messageTimer = 1.4f;
+            PlaySfx(assets.explosion, 0.32f, 1.4f);
+            break;
+        }
+
+        /* ------------------------------------------------ NOVA LANCE ----
+           VEX lines up three heavy bolts and lets them go all at once.
+           Slow to reload, but almost nothing survives a direct hit. */
+        case SP_NOVALANCE: {
+            for (int i = -1; i <= 1; i++) {
+                Vector2 from = V2Add(V2Add(at, V2Scale(dir, 9.0f)),
+                                     V2Scale(side, 7.0f * (float)i));
+                SpawnBullet(from, V2Scale(dir, ALLY_BULLET_SPD * 1.35f),
+                            TILE_BOLT, ALLY_BULLET_DMG * 2.4f * AllyGunMul(a),
+                            1.1f, 2.2f, BULLET_ALLY, slot);
+            }
+            g.shake = fmaxf(g.shake, 6.0f);
+            snprintf(msg, sizeof msg, a ? "%s - NOVA LANCE" : "NOVA LANCE", a ? pr->name : "");
+            TextCopy(g.message, msg);
+            g.messageTimer = 1.4f;
+            PlaySfx(assets.shoot, 0.35f, 0.55f);
+            break;
+        }
+
+        /* -------------------------------------------------- IRON RAIN ---
+           VEX rakes a wide forward cone - less elegant than the lance, but
+           it comes back fast and covers a lot of ground. */
+        case SP_IRONRAIN: {
+            for (int i = 0; i < 9; i++) {
+                float a2 = ang + (-50.0f + 12.5f * (float)i) * DEG2RAD;
+                Vector2 d = V2(cosf(a2), sinf(a2));
+                SpawnBullet(V2Add(at, V2Scale(d, 8.0f)),
+                            V2Scale(V2Norm(d), ALLY_BULLET_SPD * 1.05f),
+                            TILE_BOLT, ALLY_BULLET_DMG * 0.55f * AllyGunMul(a),
+                            0.8f, 0.8f, BULLET_ALLY, slot);
+            }
+            PlaySfx(assets.shoot, 0.30f, 1.6f);
+            snprintf(msg, sizeof msg, a ? "%s - IRON RAIN" : "IRON RAIN", a ? pr->name : "");
+            TextCopy(g.message, msg);
+            g.messageTimer = 1.2f;
+            break;
+        }
+
+        /* ------------------------------------------------- AEGIS FIELD --
+           JUNO's dome: a bubble of quiet that shoves enemies out, eats their
+           fire, patches everyone inside up and hands out a gun. */
+        case SP_AEGIS: {
+            FieldCast(a);
+
+            for (int i = -1; i <= 1; i += 2) {
+                Vector2 from = V2Add(V2Add(at, V2Scale(dir, 9.0f)),
+                                     V2Scale(side, 4.0f * (float)i));
+                SpawnBullet(from, V2Scale(dir, ALLY_BULLET_SPD * 1.15f),
+                            TILE_BOLT, ALLY_BULLET_DMG * 1.7f * AllyGunMul(a),
+                            1.4f, 1.15f, BULLET_ALLY, slot);
+            }
+            snprintf(msg, sizeof msg, a ? "%s - AEGIS FIELD" : "AEGIS FIELD", a ? pr->name : "");
+            TextCopy(g.message, msg);
+            g.messageTimer = 1.4f;
+            PlaySfx(assets.pickup, 0.28f, 1.25f);
+            break;
+        }
+
+        /* -------------------------------------------------- TRIAGE ------
+           JUNO patches the whole squadron up in one pulse and tosses a
+           weapon crate out of the medbay while she is at it. */
+        case SP_TRIAGE: {
+            g.player.hp = fminf(PLAYER_MAX_HP, g.player.hp + 30.0f);
+            SpawnBurstParticles(g.player.pos, 1.0f, COL_HEAL);
+            for (int i = 0; i < MAX_ALLIES; i++) {
+                Ally *o = &g.allies[i];
+                if (!o->alive) continue;
+                if (Dist2(o->pos, at) > 130.0f * 130.0f) continue;
+                o->hp = fminf(o->maxHp, o->hp + 30.0f);
+                SpawnBurstParticles(o->pos, 1.0f, COL_HEAL);
+            }
+            SpawnPickup(RandomWeaponCrate(), at);
+            snprintf(msg, sizeof msg, a ? "%s - TRIAGE PULSE" : "TRIAGE PULSE", a ? pr->name : "");
+            TextCopy(g.message, msg);
+            g.messageTimer = 1.3f;
+            PlaySfx(assets.pickup, 0.40f, 1.05f);
+            break;
+        }
+
+        /* ------------------------------------------------- WASP SWARM ---
+           BIT's originals: five seekers leave in a fan, arc around and come
+           back for anything still moving. */
+        case SP_SWARM: {
+            for (int i = -2; i <= 2; i++) {
+                Vector2 from = V2Add(V2Add(at, V2Scale(dir, 8.0f)),
+                                     V2Scale(side, 4.0f * (float)i));
+                float a2 = ang + (float)i * 24.0f * DEG2RAD;
+                Vector2 d = V2(cosf(a2), sinf(a2));
+
+                Bullet *b = SpawnBullet(from, V2Scale(d, 190.0f), TILE_BOLT,
+                                        ALLY_BULLET_DMG * 1.25f * AllyGunMul(a),
+                                        2.4f, 1.6f, BULLET_ALLY, slot);
+                if (b) b->homing = 4.6f;
+                SpawnBurstParticles(from, 0.25f, paint);
+            }
+            snprintf(msg, sizeof msg, a ? "%s - WASP SWARM" : "WASP SWARM", a ? pr->name : "");
+            TextCopy(g.message, msg);
+            g.messageTimer = 1.4f;
+            PlaySfx(assets.enemyShoot, 0.22f, 0.85f);
+            break;
+        }
+
+        /* --------------------------------------------- STING BARRAGE ----
+           BIT in a panic is somehow MORE accurate: a quick, close-range
+           volley of short-lived seekers. Reloads fast, hurts for less. */
+        case SP_STING: {
+            for (int i = 0; i < 8; i++) {
+                float a2 = ang + (-35.0f + 10.0f * (float)i) * DEG2RAD;
+                Vector2 d = V2(cosf(a2), sinf(a2));
+                Bullet *b = SpawnBullet(V2Add(at, V2Scale(d, 8.0f)),
+                                        V2Scale(d, 260.0f), TILE_BOLT,
+                                        ALLY_BULLET_DMG * 0.9f * AllyGunMul(a),
+                                        0.9f, 1.2f, BULLET_ALLY, slot);
+                if (b) b->homing = 6.0f;
+            }
+            snprintf(msg, sizeof msg, a ? "%s - STING BARRAGE" : "STING BARRAGE", a ? pr->name : "");
+            TextCopy(g.message, msg);
+            g.messageTimer = 1.1f;
+            PlaySfx(assets.enemyShoot, 0.25f, 1.15f);
+            break;
+        }
+    }
+}
+
+/* -----------------------------------------------------------------------
+ *  The player's own ultimate: draws from the same pool as the wingmen.
+ * ----------------------------------------------------------------------- */
 void PlayerSpecial(void)
 {
     Player *p = &g.player;
     if (!p->alive || p->specialTimer > 0.0f) return;
 
-    p->specialTimer = SPECIAL_COOLDOWN;
-    p->shieldTimer  = fmaxf(p->shieldTimer, SPECIAL_SHIELD);
+    int sel = (p->specialSel >= 0 && p->specialSel < SPECIAL_KIND_COUNT)
+              ? p->specialSel : 0;
 
-    Vector2 at = p->pos;
-
-    for (int i = 0; i < MAX_ENEMIES; i++) {
-        Enemy *e = &g.enemies[i];
-        if (!e->alive || e->spawnFade > 0.0f) continue;
-
-        float d = Dist2(e->pos, at);
-        if (d > SPECIAL_RADIUS * SPECIAL_RADIUS) continue;
-
-        Vector2 push = V2Sub(e->pos, at);
-        float   len  = V2Len(push);
-        Vector2 n    = (len > 0.001f) ? V2Scale(push, 1.0f / len) : V2(1.0f, 0.0f);
-
-        e->vel = V2Add(e->vel, V2Scale(n, 340.0f));
-        DamageEnemy(e, SPECIAL_DAMAGE * (1.0f - 0.6f * (len / SPECIAL_RADIUS)));
-    }
-
-    /* sweep the enemy fire out of the air */
-    float sweep = SPECIAL_RADIUS * 1.2f;
-    for (int i = 0; i < MAX_BULLETS; i++) {
-        Bullet *b = &g.bullets[i];
-        if (!b->alive || b->owner == BULLET_PLAYER || b->owner == BULLET_ALLY) continue;
-        if (Dist2(b->pos, at) > sweep * sweep) continue;
-
-        b->alive = false;
-        SpawnBurstParticles(b->pos, 0.22f, COL_SHALLOW);
-    }
-
-    SpawnBurst(at, 2.6f);
-    SpawnBurstParticles(at, 2.4f, COL_SHALLOW);
-    g.shake   = fmaxf(g.shake, 14.0f);
-    g.hitStop = fmaxf(g.hitStop, 0.05f);
-
-    TextCopy(g.message, "OVERSURGE");
-    g.messageTimer = 1.6f;
-    PlaySfx(assets.explosionBig, 0.55f, 0.72f);
+    RunSpecial(NULL, sel);
+    p->specialTimer = kSpecials[sel].cooldown;
 }
+
 
 /* --------------------------------------------------------------------------
  *  JUNO's dome
@@ -1534,88 +1783,18 @@ static void AllyShoot(Ally *a)
  *  Special weapons - one per pilot, fired on their own cadence whenever they
  *  have a target lined up.
  * ----------------------------------------------------------------------- */
+int         PlayerSpecialCount(void) { return SPECIAL_KIND_COUNT; }
+const char *PlayerSpecialName(int idx) { return kSpecials[idx].name; }
+float       PlayerSpecialCooldown(int idx) { return kSpecials[idx].cooldown; }
+const char *AllySpecialName(const Ally *a) { return kSpecials[RoleSpecial(a->role, a->specialSel)].name; }
+float       AllySpecialCooldown(const Ally *a) { return kSpecials[RoleSpecial(a->role, a->specialSel)].cooldown; }
+
 void AllySpecial(Ally *a)
 {
-    const AllyProfile *pr = AllyProfileOf(a->role);
-    Vector2 dir = V2(cosf(a->angle), sinf(a->angle));
-    Vector2 side = V2(-dir.y, dir.x);
-
-    a->specialFlash = 0.55f;
-
-    switch (a->role) {
-        /* ---------------------------------------------------------- VEX ----
-           BROADSIDE. Vex has no patience for a neat firing line: she dumps a
-           ring of shot out of both airlocks at once, which answers being
-           surrounded and, in her view, most other questions too. */
-        case ALLY_VEX:
-        default: {
-            for (int i = 0; i < 12; i++) {
-                float ang = a->angle + (float)i * 30.0f * DEG2RAD;
-                Vector2 d = V2(cosf(ang), sinf(ang));
-                SpawnBullet(V2Add(a->pos, V2Scale(d, 10.0f)),
-                            V2Scale(d, ALLY_BULLET_SPD * 0.72f),
-                            TILE_BOLT, ALLY_BULLET_DMG * 0.75f * AllyGunMul(a),
-                            1.6f, 0.55f, BULLET_ALLY, a->slot);
-            }
-            for (int i = 0; i < 10; i++) {
-                float ang = (float)i * 36.0f * DEG2RAD;
-                Vector2 d = V2(cosf(ang), sinf(ang));
-                SpawnBurstParticles(V2Add(a->pos, V2Scale(d, 13.0f)), 0.28f, pr->hull);
-            }
-
-            TextCopy(g.message, "VEX - BROADSIDE");
-            g.messageTimer    = 1.4f;
-            g.shake           = fmaxf(g.shake, 4.0f);
-            PlaySfx(assets.explosion, 0.32f, 1.4f);
-            break;
-        }
-
-        /* --------------------------------------------------------- JUNO ----
-           The dome: a bubble of quiet that shoves enemies out, eats their
-           fire, patches up everyone inside and hands out a gun. Plus the
-           heavy twin shot she always had. */
-        case ALLY_JUNO: {
-            FieldCast(a);
-
-            TextCopy(g.message, "JUNO - AEGIS FIELD");
-            g.messageTimer = 1.4f;
-
-            for (int i = -1; i <= 1; i += 2) {
-                Vector2 from = V2Add(V2Add(a->pos, V2Scale(dir, 9.0f)),
-                                     V2Scale(side, 4.0f * (float)i));
-                SpawnBullet(from, V2Scale(dir, ALLY_BULLET_SPD * 1.15f), TILE_BOLT,
-                            ALLY_BULLET_DMG * 1.7f * AllyGunMul(a), 1.4f, 1.15f,
-                            BULLET_ALLY, a->slot);
-            }
-            PlaySfx(assets.pickup, 0.28f, 1.25f);
-            break;
-        }
-
-        /* ---------------------------------------------------------- BIT ----
-           WASP SWARM. Five seekers leave in a fan, arc around and come back
-           for anything still moving. Terrible for the nerves - hers and
-           everyone else's. */
-        case ALLY_BIT: {
-            for (int i = -2; i <= 2; i++) {
-                Vector2 from = V2Add(V2Add(a->pos, V2Scale(dir, 8.0f)),
-                                     V2Scale(side, 4.0f * (float)i));
-                float ang = a->angle + (float)i * 24.0f * DEG2RAD;
-                Vector2 d = V2(cosf(ang), sinf(ang));
-
-                Bullet *b = SpawnBullet(from, V2Scale(d, 190.0f), TILE_BOLT,
-                                        ALLY_BULLET_DMG * 1.25f * AllyGunMul(a),
-                                        2.4f, 1.6f, BULLET_ALLY, a->slot);
-                if (b) b->homing = 4.6f;
-
-                SpawnBurstParticles(from, 0.25f, pr->hull);
-            }
-
-            TextCopy(g.message, "BIT - WASP SWARM");
-            g.messageTimer = 1.4f;
-            PlaySfx(assets.enemyShoot, 0.22f, 0.85f);
-            break;
-        }
-    }
+    RunSpecial(a, RoleSpecial(a->role, a->specialSel));
+    /* each pilot keeps more than one trick in the bag: after a special
+       fires, reload a different one at random. */
+    RoleNextSpecial(a);
 }
 
 void AlliesUpdate(float dt)
@@ -1643,6 +1822,7 @@ void AlliesUpdate(float dt)
                 a->spawnFade    = ALLY_SPAWN_FADE;
                 a->fireTimer    = 0.5f;
                 a->specialTimer = 2.0f;
+                a->specialSel   = GetRandomValue(0, RoleSpecialCount(a->role) - 1);
                 a->distress     = 0.0f;
                 a->helpCool     = 3.0f;
                 a->assistTimer  = 0.0f;
@@ -1887,7 +2067,6 @@ void AlliesUpdate(float dt)
             float tolerance = (rallying || inbound) ? 0.60f : 0.30f;
 
             if (aimError < tolerance) {
-                const AllyProfile *pr = AllyProfileOf(a->role);
                 float range = V2Len(V2Sub(target->pos, a->pos));
 
                 /* a weapon crate makes them shoot faster and hit harder */
@@ -1907,7 +2086,7 @@ void AlliesUpdate(float dt)
 
                     /* the dome is worth more than a burst, so it also costs
                        more of the pilot's attention */
-                    float cool = (a->role == ALLY_JUNO) ? FIELD_COOLDOWN : pr->cooldown;
+                    float cool = kSpecials[RoleSpecial(a->role, a->specialSel)].cooldown;
                     a->specialTimer = cool * AllyCoolMul() *
                                       (0.85f + (float)GetRandomValue(0, 30) / 100.0f);
                     a->fireTimer    = ALLY_FIRE_TIME * AllyFireMul() * hot * 1.7f;

@@ -364,17 +364,15 @@ static void GatherInput(void)
 
         if (V2Len(ls) > 0.22f) move = ls;
 
-        /* Aiming out of the deadzone takes the crosshair; only a proper push
-           opens fire, so a worn stick that never quite centres cannot spray
-           the map on its own. */
+        /* Aiming out of the deadzone takes the crosshair. The stick NEVER
+           opens fire - a worn stick that never quite centres cannot spray
+           the map on its own, and turning to look at something is not the
+           same as shooting at it. Only the button bound to FIRE shoots. */
         float rsLen = V2Len(rs);
-        /* A high deadzone: a worn or phantom stick must never be able to
-           steal the aim from the mouse. Only a deliberate push counts. */
         if (rsLen > 0.55f) {
             aim    = V2Norm(rs);
             padAim = true;
         }
-        if (rsLen > 0.62f) firing = true;
 
         if (IsGamepadButtonDown(0, binds.button[BIND_FIRE]))  firing   = true;
         if (IsGamepadButtonDown(0, binds.button[BIND_BOOST])) boosting = true;
@@ -385,6 +383,78 @@ static void GatherInput(void)
         }
         if (IsGamepadButtonPressed(0, binds.button[BIND_RECALL]))  rally   = true;
         if (IsGamepadButtonPressed(0, binds.button[BIND_SPECIAL])) special = true;
+    }
+
+    /* --- toggles ---------------------------------------------------------
+       AUTO-SHOOT: guns take care of themselves - aim snaps to the nearest
+       enemy and they keep talking, while the specials and movement stay
+       entirely the player's. V on the keyboard, A on the pad, and a badge on
+       the HUD says when it is running. The chat bubbles over the wingmen can
+       be muted the same way (H / BACK) without touching the radio log. */
+    static bool autoShoot  = false;
+    static bool chatPopups = true;
+    if (IsKeyPressed(KEY_V) ||
+        IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_FACE_DOWN)) {
+        autoShoot  = !autoShoot;
+        if (autoShoot) { TextCopy(g.message, "AUTO-SHOOT ON");  g.messageTimer = 1.2f; }
+        else           { TextCopy(g.message, "AUTO-SHOOT OFF"); g.messageTimer = 1.2f; }
+    }
+    if (IsKeyPressed(KEY_H) ||
+        IsGamepadButtonPressed(0, GAMEPAD_BUTTON_MIDDLE_LEFT)) {
+        chatPopups = !chatPopups;
+        TextCopy(g.message, chatPopups ? "CHAT POPUPS ON" : "CHAT POPUPS OFF");
+        g.messageTimer = 1.2f;
+    }
+
+    /* --- the special carousel -------------------------------------------
+       Every special move in the squadron - the player's own shockwave and
+       the wingmen's vitamins - sits in one pool. One is loaded at a time,
+       each reloads at its own pace, and TAB (or the dpad) flips through the
+       bag; 1-8 loads a move straight away. E / the SPECIAL button fires it. */
+    {
+        int   count = PlayerSpecialCount();
+        int   sel   = g.player.specialSel;
+        int   dir   = 0;
+        bool  changed = false;
+
+        if (IsKeyPressed(KEY_TAB))                        dir = 1;
+        if (IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_FACE_RIGHT)) dir = 1;
+        if (IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_FACE_UP))    dir = 1;
+        if (IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_FACE_LEFT))  dir = -1;
+        if (IsGamepadButtonPressed(0, GAMEPAD_BUTTON_LEFT_FACE_DOWN))  dir = -1;
+
+        if (dir != 0) {
+            sel = (sel + dir + count) % count;
+            changed = true;
+        }
+        for (int k = 1; k <= 8; k++) {
+            if (k > count) break;
+            if (IsKeyPressed(KEY_ONE + (k - 1))) { sel = k - 1; changed = true; }
+        }
+
+        if (changed && sel != g.player.specialSel) {
+            char label[40];
+            g.player.specialSel = sel;
+            snprintf(label, sizeof label, "LOADED: %s", PlayerSpecialName(sel));
+            TextCopy(g.message, label);
+            g.messageTimer = 1.4f;
+        }
+    }
+
+    /* --- auto-shoot takes over the guns, nothing else ---------------------*/
+    if (autoShoot) {
+        Enemy *best = NULL;
+        float bestD = 430.0f * 430.0f;
+        for (int i = 0; i < MAX_ENEMIES; i++) {
+            Enemy *e = &g.enemies[i];
+            if (!e->alive || e->spawnFade > 0.0f) continue;
+            float d = Dist2(e->pos, g.player.pos);
+            if (d < bestD) { bestD = d; best = e; }
+        }
+        if (best) {
+            aim    = V2Norm(V2Sub(best->pos, g.player.pos));
+            firing = true;
+        }
     }
 
     /* --- which hand is driving? ------------------------------------------
@@ -440,6 +510,8 @@ static void GatherInput(void)
     input.rally        = rally;
     input.special      = special;
     input.usingGamepad = padMode;
+    input.autoAim      = autoShoot;
+    input.chatPopups   = chatPopups;
     if (mouseVirtual.x != mouseVirtual.x || mouseVirtual.y != mouseVirtual.y) {
         mouseVirtual = V2(BASE_W * 0.5f, BASE_H * 0.5f);
     }
@@ -811,6 +883,26 @@ static void HandleGlobalKeys(void)
 
     if (IsKeyPressed(KEY_F12)) TakeScreenshot("pixel_squadron.png");
 
+    /* F cycles the FPS cap anywhere the flight is live: uncapped (FREE),
+       30, 60, 120, 144. The counter in the corner and the little message
+       both confirm it, so the key is never silent. */
+    if ((g.state == STATE_PLAY || g.state == STATE_PAUSED) &&
+        IsKeyPressed(KEY_F)) {
+        static const int fpsOpts[] = { 0, 30, 60, 120, 144 };
+        static int fpsIdx = 0;
+        for (int i = 0; i < 5; i++)
+            if (fpsOpts[i] == fpsCap) { fpsIdx = i; break; }
+        fpsIdx = (fpsIdx + 1) % 5;
+        fpsCap = fpsOpts[fpsIdx];
+        SetTargetFPS((fpsCap <= 0) ? 1000 : fpsCap);
+
+        char label[24];
+        if (fpsCap <= 0) snprintf(label, sizeof label, "FPS CAP: FREE");
+        else             snprintf(label, sizeof label, "FPS CAP: %d", fpsCap);
+        TextCopy(g.message, label);
+        g.messageTimer = 1.4f;
+    }
+
     switch (g.state) {
         case STATE_TITLE:
             /* Enter (or A on a pad) ships out. Escape backs out of the game
@@ -838,18 +930,6 @@ static void HandleGlobalKeys(void)
 
             if (IsKeyPressed(KEY_C)) { remapActive = true; remapArmed = false; break; }
 
-            /* F cycles the FPS cap: uncapped, 30, 60, 120, 144. */
-            if (IsKeyPressed(KEY_F)) {
-                static const int fpsOpts[] = { 0, 30, 60, 120, 144 };
-                static int fpsIdx = 0;
-                /* find current index */
-                for (int i = 0; i < 5; i++) {
-                    if (fpsOpts[i] == fpsCap) { fpsIdx = i; break; }
-                }
-                fpsIdx = (fpsIdx + 1) % 5;
-                fpsCap = fpsOpts[fpsIdx];
-                SetTargetFPS(fpsCap);
-            }
 
             /* Escape: if we are still in fullscreen, the first press already
                paused; the second one drops out of fullscreen instead of
@@ -941,6 +1021,9 @@ int main(int argc, char **argv)
                    "\n"
                    "  F11 toggles fullscreen      F12 saves a screenshot\n"
                    "  Q   recall the wing to you\n"
+                   "  TAB/1-8 load a special move, E fires it\n"
+                   "  V   auto-shoot toggle       H   chat popups toggle\n"
+                   "  F   caps the fps (FREE/30/60/120/144)\n"
                    "  VEX/JUNO/BIT fly your wing: each has a special weapon, and\n"
                    "  they talk. Answer a red ! on the map to bail one out.\n");
             return 0;
