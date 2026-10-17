@@ -509,6 +509,13 @@ static void GatherInput(void)
         TextCopy(g.message, chatPopups ? "CHAT POPUPS ON" : "CHAT POPUPS OFF");
         g.messageTimer = 1.2f;
     }
+    /* slow-mo training mode: the world crawls at quarter speed (but the
+       cursor and camera stay live), so manual aiming gets dead easy */
+    if (IsKeyPressed(KEY_G)) {
+        g_slowMo = !g_slowMo;
+        TextCopy(g.message, g_slowMo ? "SLOW-MO ON" : "SLOW-MO OFF");
+        g.messageTimer = 1.2f;
+    }
     /* and the radio log on the right gets its own switch (L / menu button),
        so the whole squadron can be silenced without turning off either. */
     if (IsKeyPressed(KEY_L) ||
@@ -784,6 +791,8 @@ static void UpdatePlaying(float dt)
 
     /* hit-stop: freeze the simulation for a couple of frames on a big kill */
     float step = dt;
+    /* slow-mo cheats the clock down to a crawl so manual aiming gets easy */
+    if (g_slowMo && g.state == STATE_PLAY) step *= 0.25f;
     if (g.hitStop > 0.0f) {
         g.hitStop -= dt;
         step = dt * 0.15f;

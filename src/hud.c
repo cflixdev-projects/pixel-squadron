@@ -174,14 +174,24 @@ void HudDraw(Camera2D cam)
     /* --- the squadron, below the hull panel --------------------------- */
     /* Taller rows with a clear gap under the heading: at the old 11px pitch
        the first name ran straight into the "WINGMEN" title. */
-    float wingH = 25.0f + 14.0f * (float)g_devWingCount;
+    /* Only six seats get a row of their own - beyond that the squadron is
+       summarised in a single "(+N MORE)" line at the bottom of the box. */
+    int rows = (g_devWingCount < 6) ? g_devWingCount : 6;
+    int more = g_devWingCount - rows;
+    float wingH = 25.0f + 14.0f * (float)rows + (more > 0 ? 10.0f : 0.0f);
     /* the box hugs its widest row (icon + name + bar + pip + the special
        short name) with five pixels to spare - no dead wall of panel. */
     DrawPanel((Rectangle){ 6, 38, 138, wingH });
     DrawTextPixShadow(assets.font, "WINGMEN", V2(10, 47), 1, COL_SHALLOW);
 
-    for (int i = 0; i < g_devWingCount; i++)
+    for (int i = 0; i < rows; i++)
         DrawWingmanRow(i, 63.0f + (float)i * 14.0f);
+    if (more > 0) {
+        char moreTxt[24];
+        snprintf(moreTxt, sizeof moreTxt, "+%d MORE", more);
+        DrawTextPix(assets.font, moreTxt, V2(17, 63.0f + 14.0f * rows), 1,
+                    (Color){ 96, 116, 134, 255 });
+    }
 
     /* --- score, top right --------------------------------------------- */
     /* 7 digits on a 12px pitch span 88px; give the panel 8px of padding on

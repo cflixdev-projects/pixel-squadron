@@ -417,6 +417,10 @@ void EntitiesReset(void)
     g.field      = (AegisField){ 0 };
     for (int i = 0; i < MAX_ALLIES; i++) g.allyKills[i] = 0;
 
+    /* a fresh run starts cheat-clean: no god, normal speed */
+    g_devGod  = false;
+    g_slowMo  = false;
+
     /* Start over the most land-rich part of whatever the arena generator just
        produced, so the first wave does not have to be found across an ocean. */
     Vector2 start = ArenaScenicPos();
@@ -532,6 +536,7 @@ typedef struct {
 /* ------------------------ dev cheat console state ------------------------ */
 bool g_devOpen    = false;
 bool g_devGod     = false;
+bool g_slowMo     = false;
 char g_devInput[DEV_CMD_MAX]   = "";
 char g_devHistory[DEV_HIST_LINES][DEV_CMD_MAX] = { "" };
 int  g_devWingCount = 3;
@@ -808,13 +813,15 @@ static void RunSpecial(Ally *a, int tag)
 void PlayerSpecial(void)
 {
     Player *p = &g.player;
-    if (!p->alive || p->specialTimer > 0.0f) return;
+    if (!p->alive) return;
+    if (p->specialTimer > 0.0f && !g_devGod) return;
 
     int sel = (p->specialSel >= 0 && p->specialSel < SPECIAL_KIND_COUNT)
               ? p->specialSel : 0;
 
     RunSpecial(NULL, sel);
-    p->specialTimer = kSpecials[sel].cooldown;
+    /* in god mode the ultimate never has to breathe */
+    p->specialTimer = g_devGod ? 0.0f : kSpecials[sel].cooldown;
 }
 
 
@@ -1029,6 +1036,8 @@ void PlayerUpdate(float dt)
         p->boostFuel += dt * 0.55f;                    /* refills in ~3s */
         if (p->boostFuel > PLAYER_BOOST_FUEL) p->boostFuel = PLAYER_BOOST_FUEL;
     }
+    /* god mode also pockets the boost tank */
+    if (g_devGod) p->boostFuel = PLAYER_BOOST_FUEL;
 
     float accel    = boosting ? PLAYER_ACCEL * 3.0f : PLAYER_ACCEL;
     float friction = boosting ? PLAYER_FRICTION * 0.35f : PLAYER_FRICTION;
@@ -1529,12 +1538,24 @@ Vector2 AllyFormationPos(int slot)
 {
     /* VEX and JUNO tuck behind the wings, BIT hangs wide at the tail; the
        three dev seats fly tight flank positions and a far escort slot. */
-    static const float kAngle[MAX_ALLIES] = { 143.0f, 217.0f, 180.0f,
-                                              100.0f, 260.0f, 190.0f };
-    static const float kDist [MAX_ALLIES] = {  74.0f,  74.0f, 112.0f,
-                                               88.0f,  88.0f, 132.0f };
+    static const float kAngle[6] = { 143.0f, 217.0f, 180.0f,
+                                     100.0f, 260.0f, 190.0f };
+    static const float kDist [6] = {  74.0f,  74.0f, 112.0f,
+                                      88.0f,  88.0f, 132.0f };
 
-    int   i = (slot >= 0 && slot < MAX_ALLIES) ? slot : 0;
+    int i = (slot >= 0 && slot < MAX_ALLIES) ? slot : 0;
+
+    /* seats past the classic six fan out into an ever wider escort ring
+       behind the ship, alternating left and right */
+    if (i >= 6) {
+        int j     = i - 6;
+        float aDeg = 180.0f + (((j & 1) ? 1 : -1) * (21.0f + (j >> 1) * 13.0f));
+        float dist = 104.0f + (j >> 1) * 17.0f;
+        float a    = g.player.angle + aDeg * DEG2RAD;
+        return V2(g.player.pos.x + cosf(a) * dist,
+                  g.player.pos.y + sinf(a) * dist);
+    }
+
     float a = g.player.angle + kAngle[i] * DEG2RAD;
 
     return V2(g.player.pos.x + cosf(a) * kDist[i],

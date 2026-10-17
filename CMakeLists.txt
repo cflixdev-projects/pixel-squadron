@@ -56,10 +56,16 @@ add_executable(pixel_squadron
 target_include_directories(pixel_squadron PRIVATE src)
 target_link_libraries(pixel_squadron PRIVATE raylib)
 
-# Windows builds embed the pixel-art ship as the executable's icon.
+# Windows builds embed the pixel-art ship as the executable's icon, and run
+# as a GUI program: no stray black terminal window behind the game.
 if(WIN32 AND NOT EMSCRIPTEN)
     enable_language(RC)
     target_sources(pixel_squadron PRIVATE icons/app.rc)
+    if(MINGW)
+        target_link_options(pixel_squadron PRIVATE -mwindows)
+    elseif(MSVC)
+        target_link_options(pixel_squadron PRIVATE /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup)
+    endif()
 endif()
 
 if(NOT MSVC)

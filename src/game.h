@@ -177,7 +177,7 @@ extern const Color kRockRamp[BIOME_COUNT][3];
 #define MAX_PICKUPS 48
 #define MAX_BURSTS 80
 #define MAX_POPUPS 40
-#define MAX_ALLIES 6   /* 3 standard pilots + dev-spawned extras */
+#define MAX_ALLIES 32  /* 3 standard pilots - the dev seats run into double digits */
 #define ALLY_RESPAWN 15.0f  /* seconds before a downed wingman rejoins */
 #define ALLY_POWER_TIME  9.0f    /* a weapon crate keeps a wingman hot   */
 #define ALLY_SHIELD_TIME 8.0f    /* a shield crate keeps a wingman alive  */
@@ -636,6 +636,7 @@ extern Graphics gfx;
 
 extern bool g_devOpen;                 /* the console is up, type away   */
 extern bool g_devGod;                  /* cheat: the player takes no hits */
+extern bool g_slowMo;                  /* cheat: the world crawls, aim in peace */
 extern char g_devInput[DEV_CMD_MAX];   /* line being typed               */
 extern char g_devHistory[DEV_HIST_LINES][DEV_CMD_MAX]; /* last answers   */
 extern int  g_devWingCount;            /* live wingman slots (HUD)       */

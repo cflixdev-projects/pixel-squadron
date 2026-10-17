@@ -77,12 +77,15 @@ your three wingmen, who chat, bicker and (usually) have your back.
   including the pad bindings, saves to `settings.cfg` the moment you touch
   it.
 - **Dev cheat console** - press `Ctrl+Y` in flight for a chat-box style cheat
-  console with the cheat list shown the moment it opens: `god` (no damage),
-  `god off`, `hp 500`, `heal`, `wave 40`, `skip` (+5 waves), `wingmen 6` (up
-  to six ships in formation), `enemies 12`, `clear`, and `help` lists them
-  again. `ENTER` runs a line, `ESC` closes the box; the ship holds its
-  heading while you type. A fresh run resets everything to the standard
-  three-ship squadron.
+  console with the cheat list shown the moment it opens: `god` (no damage,
+  specials never need to recharge and the boost tank never runs dry),
+  `god off`, `hp 500`, `heal`, `wave 40`, `skip` (+5 waves), `wingmen 16`
+  (however many seats you want - the panel lists six and a "+N MORE" line),
+  `enemies 12`, `clear`, and `help` lists them again. `ENTER` runs a line,
+  `ESC` closes the box; the ship holds its heading while you type. A fresh
+  run resets everything to the standard three-ship squadron.
+- **Slow-motion (G)** - toggles a quarter-speed world for manual aiming; the
+  cursor, camera and radio stay live, only the battlefield crawls.
 - **Wave-based survival** with a score, three weapon levels, rapid fire and
   shields.
 - **Fills the screen** - the game renders into a pixel-perfect virtual screen
@@ -104,6 +107,7 @@ your three wingmen, who chat, bicker and (usually) have your back.
 | Special pool: fire it | `E` | `Y` |
 | Auto-shoot toggle | `V` | `A` |
 | Dev cheat console | `Ctrl+Y` (cheats listed inside) | - |
+| Slow-motion mode | `G` (toggle) | - |
 | Chat bubbles toggle | `H` | `Back` |
 | Cap the fps | `F` (free/30/60/120/144) | - |
 | Rebind the pad | `C` (from the pause menu) | - |
