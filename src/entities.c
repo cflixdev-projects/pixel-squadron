@@ -549,7 +549,7 @@ static const SpecialDef kSpecials[SPECIAL_KIND_COUNT] = {
     { "NOVA LANCE",    "NOVA",    8.0f },
     { "IRON RAIN",     "IRON",    6.0f },
     { "AEGIS FIELD",   "AEGIS",  16.0f },
-    { "TRIAGE PULSE",  "TRIAGE", 10.0f },
+    { "TRIAGE PULSE",  "FIX",   10.0f },
     { "WASP SWARM",    "WASP",   11.0f },
     { "STING BARRAGE", "STING",   7.0f },
 };
@@ -2912,8 +2912,13 @@ void WaveSpawnStep(float dt)
  *      clear            wipe the arena
  *      help             the list, in case you forget
  *
- *  Ctrl+Y (any state of play) skips five waves without opening the box.
+ *  Ctrl+Y (any state of play) opens and closes the cheat box, which lists
+ *  its own cheats the moment it opens.
  * ----------------------------------------------------------------------- */
+/* remember when the box opened: the very first breath of keys is swallowed
+   so the Ctrl+Y that opened it doesn't also type a stray y into the line */
+static double g_devOpenedAt = -1.0;
+
 static void DevPrint(const char *fmt, ...)
 {
     char line[DEV_CMD_MAX];
@@ -2999,7 +3004,15 @@ void DevRunScriptedTest(void)
 void DevConsoleToggle(void)
 {
     g_devOpen = !g_devOpen;
-    if (g_devOpen) g_devInput[0] = '\0';
+    g_devOpenedAt = GetTime();
+    if (g_devOpen) {
+        g_devInput[0] = '\0';
+        /* the menu of cheats is the first thing the box shows, so nobody
+           has to remember what is on offer */
+        DevPrint("CHEATS: GOD  GOD OFF  HEAL  HP N");
+        DevPrint("WAVE N  SKIP  CLEAR");
+        DevPrint("WINGMEN N  ENEMIES N");
+    }
 }
 
 static void DevExec(void);
@@ -3007,6 +3020,12 @@ static void DevExec(void);
 void DevConsoleFeed(void)
 {
     int k;
+    /* the press that opened the box is still waiting in the key queue -
+       keep the box deaf for a breath so a Ctrl+Y does not type a stray y */
+    if (GetTime() - g_devOpenedAt < 0.15) {
+        while (GetKeyPressed() != 0) {}
+        return;
+    }
     while ((k = GetKeyPressed()) != 0) {
 #ifndef __EMSCRIPTEN__
         TraceLog(LOG_INFO, "DEVKEY %d", k);

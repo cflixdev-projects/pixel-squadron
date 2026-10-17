@@ -1364,14 +1364,11 @@ static void HandleGlobalKeys(void)
                 IsGamepadButtonPressed(0, GAMEPAD_BUTTON_MIDDLE_RIGHT))) {
                 g.state = STATE_PAUSED;
             }
-            /* the dev console (T) and its two quick cheats: Ctrl+Y jumps
-               five waves ahead, F1+Y opens the whole cheat box anyway */
-            if (!g_devOpen && IsKeyPressed(KEY_T)) { DevConsoleToggle(); break; }
+            /* dev mode lives behind Ctrl+Y: the cheat box opens, cheats
+               listed inside, and the same press closes it again */
             if (IsKeyPressed(KEY_Y) &&
                 (IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL))) {
-                StartWave(g.wave + 5);
-                TextCopy(g.message, "SKIPPED 5 WAVES");
-                g.messageTimer = 1.5f;
+                DevConsoleToggle();
             }
             break;
 

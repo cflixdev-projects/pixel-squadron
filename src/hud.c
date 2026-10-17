@@ -100,10 +100,10 @@ static void DrawWingmanRow(int i, float y)
     DrawShip(pr->ship, V2(17.0f, y + 5.0f), ART_FORWARD, 0.4f, hull);
 
     Color name = a->alive ? pr->text : (Color){ 74, 92, 110, 255 };
-    DrawTextPix(assets.font, pr->name, V2(27.0f, y), 1, name);
+    DrawTextPix(assets.font, pr->name, V2(24.0f, y), 1, name);
 
     /* hull bar (or a rebuild timer while they are down) */
-    Rectangle bar = { 63.0f, y + 2.0f, 40.0f, 5.0f };
+    Rectangle bar = { 55.0f, y + 2.0f, 36.0f, 5.0f };
     DrawRectangle((int)bar.x, (int)bar.y, (int)bar.width, (int)bar.height,
                   (Color){ 12, 20, 28, 255 });
 
@@ -125,7 +125,7 @@ static void DrawWingmanRow(int i, float y)
                 ? Clamp(1.0f - a->specialTimer / AllySpecialCooldown(a), 0.0f, 1.0f)
                 : 0.0f;
 
-    Rectangle pip = { 107.0f, y + 2.0f, 5.0f, 5.0f };
+    Rectangle pip = { 95.0f, y + 2.0f, 5.0f, 5.0f };
     DrawRectangle((int)pip.x, (int)pip.y, (int)pip.width, (int)pip.height,
                   (Color){ 12, 20, 28, 255 });
     if (ready >= 0.999f) {
@@ -146,7 +146,7 @@ static void DrawWingmanRow(int i, float y)
                           (unsigned char)(250.0f - 5.0f * namePulse),
                           (unsigned char)(120.0f + 135.0f * namePulse) }
                : (Color){ 74, 92, 110, 255 };
-    DrawTextPix(assets.font, AllySpecialShort(a), V2(118.0f, y), 1, spec);
+    DrawTextPix(assets.font, AllySpecialShort(a), V2(104.0f, y), 1, spec);
 }
 
 void HudDraw(Camera2D cam)
@@ -175,7 +175,9 @@ void HudDraw(Camera2D cam)
     /* Taller rows with a clear gap under the heading: at the old 11px pitch
        the first name ran straight into the "WINGMEN" title. */
     float wingH = 20.0f + 14.0f * (float)g_devWingCount;
-    DrawPanel((Rectangle){ 6, 38, 192, wingH });
+    /* the box hugs its widest row (icon + name + bar + pip + the special
+       short name) with five pixels to spare - no dead wall of panel. */
+    DrawPanel((Rectangle){ 6, 38, 138, wingH });
     DrawTextPixShadow(assets.font, "WINGMEN", V2(10, 42), 1, COL_SHALLOW);
 
     for (int i = 0; i < g_devWingCount; i++)
