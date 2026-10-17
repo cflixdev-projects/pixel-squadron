@@ -171,13 +171,13 @@ extern const Color kRockRamp[BIOME_COUNT][3];
 /* -------------------------------------------------------------------------
  *  Pools
  * ---------------------------------------------------------------------- */
-#define MAX_BULLETS 768
-#define MAX_ENEMIES 160
-#define MAX_PARTICLES 1536
-#define MAX_PICKUPS 48
+#define MAX_BULLETS 3072
+#define MAX_ENEMIES 1024
+#define MAX_PARTICLES 6144
+#define MAX_PICKUPS 96
 #define MAX_BURSTS 80
 #define MAX_POPUPS 40
-#define MAX_ALLIES 32  /* 3 standard pilots - the dev seats run into double digits */
+#define MAX_ALLIES 64  /* seats are yours to fill - hardware says when to stop */
 #define ALLY_RESPAWN 15.0f  /* seconds before a downed wingman rejoins */
 #define ALLY_POWER_TIME  9.0f    /* a weapon crate keeps a wingman hot   */
 #define ALLY_SHIELD_TIME 8.0f    /* a shield crate keeps a wingman alive  */

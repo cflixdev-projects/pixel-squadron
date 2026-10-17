@@ -3108,7 +3108,7 @@ void DevSpawnWingmen(int n)
 static void DevSpawnEnemies(int n)
 {
     if (n < 0) n = 0;
-    if (n > 60) n = 60;
+    /* no artificial cap: the pool sizes are the hardware's business */
 
     for (int i = 0; i < n; i++) {
         EnemyKind k = (EnemyKind)GetRandomValue(ENEMY_RAIDER, ENEMY_TENDER);
@@ -3274,7 +3274,7 @@ static void DevExec(void)
     if (strcmp(word, "wingmen") == 0) {
         char *arg = strtok(NULL, " ");
         int n = arg ? atoi(arg) : -1;
-        if (n < 0) { DevPrint("WINGMEN: 0..6"); return; }
+        if (n < 0) { DevPrint("WINGMEN: 0..%d", MAX_ALLIES); return; }
         if (n > MAX_ALLIES) n = MAX_ALLIES;
         DevSpawnWingmen(n);
         DevPrint("WING AT %d SHIPS", n);
@@ -3286,7 +3286,7 @@ static void DevExec(void)
         int n = arg ? atoi(arg) : -1;
         if (n < 1) { DevPrint("ENEMIES: GIVE A NUMBER"); return; }
         DevSpawnEnemies(n);
-        DevPrint("LANDED %d HOSTILES", n > 60 ? 60 : n);
+        DevPrint("LANDED %d HOSTILES", n);
         return;
     }
 

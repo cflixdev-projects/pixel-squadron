@@ -81,6 +81,17 @@ static void ApplyFpsCap(void)
 
 int pauseMenuSel = 0;
 
+/* Game time rides a short rolling average of the real frame time: one long
+   frame (a scheduler hiccup, a driver stall) then reads as smooth, slightly
+   slower motion instead of a stop-and-jump micro stutter. */
+static float FrameDeltaTime(void)
+{
+    static float sm = 0.0f;
+    float raw = GetFrameTime();
+    sm = (sm > 0.0f) ? (0.6f * sm + 0.4f * raw) : raw;
+    return fminf(sm, 0.05f);
+}
+
 #define GFX_SETTINGS_FILE "settings.cfg"
 
 /* Load quality settings from disk. Missing or junk values fall back to the
@@ -1082,10 +1093,10 @@ static const char *kCrtFs =
     "    }\n"
     "    float tt   = floor(uTime * 9.0);\n"
     "    float band = floor(uv.y * 44.0);\n"
-    "    float g    = step(0.985, hash(vec2(tt, band)));\n"
-    "    float dx   = (hash(vec2(tt + 7.1, band)) - 0.5) * 0.020 * g;\n"
+    "    float g    = step(0.9985, hash(vec2(tt, band)));\n"
+    "    float dx   = (hash(vec2(tt + 7.1, band)) - 0.5) * 0.006 * g;\n"
     "    vec2  ca   = uv - 0.5;\n"
-    "    float amt  = 0.0012 + dot(ca, ca) * 0.008 + g * 0.004;\n"
+    "    float amt  = 0.0012 + dot(ca, ca) * 0.008 + g * 0.0015;\n"
     "    vec3  col;\n"
     "    col.r = SAMPLE(texture0, uv + vec2(dx + amt, 0.0)).r;\n"
     "    col.g = SAMPLE(texture0, uv + vec2(dx,        0.0)).g;\n"
@@ -1423,7 +1434,10 @@ static void SetFullscreen(bool on)
 static void HandleGlobalKeys(void)
 {
 #if !defined(__EMSCRIPTEN__)
-    if (IsKeyPressed(KEY_F11)) SetFullscreen(!fullscreenOn);
+    if (IsKeyPressed(KEY_F11)) {
+        SetFullscreen(!fullscreenOn);
+        gfx.display = fullscreenOn ? 1 : 0;
+    }
 #endif
 
     if (IsKeyPressed(KEY_M)) {
@@ -1665,9 +1679,6 @@ int main(int argc, char **argv)
     bool devTest = false;     /* dev: scripted cheat console pass */
     bool devTestDone = false;
 #if !defined(__EMSCRIPTEN__)
-    bool displayForced = false;   /* --windowed / --fullscreen said so */
-#endif
-#if !defined(__EMSCRIPTEN__)
     int startFlags = START_CENTER | START_FULLSCREEN;   /* play big by default */
 #endif
     for (int i = 1; i < argc; i++) {
@@ -1680,10 +1691,8 @@ int main(int argc, char **argv)
 #if !defined(__EMSCRIPTEN__)
         } else if (strcmp(argv[i], "--fullscreen") == 0) {
             startFlags |= START_FULLSCREEN;
-            displayForced = true;
         } else if (strcmp(argv[i], "--windowed") == 0) {
             startFlags &= ~START_FULLSCREEN;
-            displayForced = true;
 #endif
         } else if (strcmp(argv[i], "--endcard") == 0) {
             endCard = true;      /* dev: screenshot the end-of-run report */
@@ -1752,9 +1761,10 @@ int main(int argc, char **argv)
     /* A headless demo should not hijack the desktop. */
     if (demoSeconds > 0.0f || endCard) startFlags &= ~START_FULLSCREEN;
 
-    /* The DISPLAY row from settings.cfg decides how the window boots -
-       unless the command line was explicit about it. */
-    if (gfx.display == 0 && !displayForced) startFlags &= ~START_FULLSCREEN;
+    /* The game always boots fullscreen; the DISPLAY row in settings is a
+       live switch from here on, not a boot decision. The command line can
+       still ask for a window (--windowed), mostly for dev runs. */
+    gfx.display = (startFlags & START_FULLSCREEN) ? 1 : 0;
 
     FitWindowToIntegerScale(startFlags);
     if (startFlags & START_FULLSCREEN) SetFullscreen(true);
@@ -1832,7 +1842,7 @@ int main(int argc, char **argv)
 #else
         while (!WindowShouldClose() && g.timer < shotAt) {
 #endif
-            float dt = fminf(GetFrameTime(), 0.05f);
+            float dt = FrameDeltaTime();
             g.timer += dt;
             DrawFrame();
 #if defined(__EMSCRIPTEN__)
@@ -1858,7 +1868,7 @@ int main(int argc, char **argv)
 #if defined(__EMSCRIPTEN__)
         WebFramePace();   /* cap pacing + event-loop pump (rAF based) */
 #endif
-        float dt = fminf(GetFrameTime(), 0.05f);
+        float dt = FrameDeltaTime();
         g.timer += dt;
 
         HandleGlobalKeys();
