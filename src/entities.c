@@ -1914,6 +1914,9 @@ void AlliesUpdate(float dt)
 
         /* --- waiting to be rebuilt ------------------------------------- */
         if (!a->alive) {
+            /* seats that were never opened stay shut - only the seats in the
+               active wing count release their pilot again */
+            if (i >= g_devWingCount) continue;
             a->respawnTimer -= dt;
             /* Respawn after 15s if the player is still alive.
                "As long as someone is alive everyone can come back after 15s." */
@@ -2801,7 +2804,7 @@ void StartWave(int wave)
             SpawnEnemyElite(k, where);
         }
         /* the wing has opinions about the new armour */
-        int alive[ALLY_ROLE_COUNT], n = 0;
+        int alive[MAX_ALLIES], n = 0;
         for (int i = 0; i < MAX_ALLIES; i++)
             if (g.allies[i].alive) alive[n++] = i;
         if (n > 0) ChatSay(alive[GetRandomValue(0, n - 1)], CHAT_ELITE);

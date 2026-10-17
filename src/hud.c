@@ -178,7 +178,8 @@ void HudDraw(Camera2D cam)
        summarised in a single "(+N MORE)" line at the bottom of the box. */
     int rows = (g_devWingCount < 6) ? g_devWingCount : 6;
     int more = g_devWingCount - rows;
-    float wingH = 25.0f + 14.0f * (float)rows + (more > 0 ? 10.0f : 0.0f);
+    /* the "+N MORE" line gets ten pixels of breathing room above the frame */
+    float wingH = 25.0f + 14.0f * (float)rows + (more > 0 ? 20.0f : 0.0f);
     /* the box hugs its widest row (icon + name + bar + pip + the special
        short name) with five pixels to spare - no dead wall of panel. */
     DrawPanel((Rectangle){ 6, 38, 138, wingH });
