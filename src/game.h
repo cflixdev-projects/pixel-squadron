@@ -185,6 +185,20 @@ extern const Color kRockRamp[BIOME_COUNT][3];
 #define ALLY_CRATE_RUSH  190.0f  /* ...and how close a crate has to be to
                                     make them break off a fight for it     */
 
+/* Live-entity index lists.
+ *
+ * The pools above are deliberately huge - hardware is the only limit - but a
+ * naive `for (i = 0; i < MAX_ENEMIES; i++)` inner loop turns every bullet and
+ * every wingman into a 1024-iteration scan, and the browser build drowns.
+ * These compact lists are rebuilt once per frame, so the hot loops cost
+ * O(what is actually in play). Every use still checks the entity's own
+ * `alive` flag, because an entry can die part-way through a frame. */
+extern int  g_enemyIdx[MAX_ENEMIES];
+extern int  g_enemyCount;
+extern int  g_bulletIdx[MAX_BULLETS];
+extern int  g_bulletCount;
+void EnemiesRebuildActive(void);   /* refresh the enemy index list */
+
 #define PLAYER_MAX_HP 100.0f
 
 /* Player buff durations, so the HUD can draw a meter for each. */
@@ -212,6 +226,14 @@ extern const Color kRockRamp[BIOME_COUNT][3];
 #define FIELD_MAX       4       /* several domes can be up at once, and the
                                    ones whose shells touch stack their     */
                                    /* push, burn and repair on top of each other */
+
+/* AEGIS gate. The dome is the squadron's panic button - a bubble that shoves
+   the swarm off, burns it and mends everyone inside - so it is kept rare.
+   Once a dome goes up it closes the hangar: the squadron must wait
+   AEGIS_REARM seconds AND bank AEGIS_KILL_REQ kills before another one can be
+   raised. The first dome of a run is free (the gate starts open). */
+#define AEGIS_REARM     15.0f
+#define AEGIS_KILL_REQ  15
 
 /* Holding Shift spends boost fuel for a short burst of extra top speed. */
 #define PLAYER_BOOST_FUEL 1.6f   /* seconds of boost available          */

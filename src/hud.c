@@ -317,8 +317,8 @@ void HudDraw(Camera2D cam)
     }
 
     /* --- off-screen enemy markers ------------------------------------- */
-    for (int i = 0; i < MAX_ENEMIES; i++) {
-        Enemy *e = &g.enemies[i];
+    for (int qi = 0; qi < g_enemyCount; qi++) {
+        Enemy *e = &g.enemies[g_enemyIdx[qi]];
         if (!e->alive) continue;
 
         Vector2 screen = GetWorldToScreen2D(e->pos, cam);
@@ -734,7 +734,7 @@ void HudDrawGraphics(int centre)
         static const char *const kWebNA = "N/A";
 #endif
         const char *value;
-        char capText[12];
+        char capText[16];
         if (i < kRowsCount) {
             switch (i) {
                 case 0: value = kRows[0].options[gfx.quality];       break;
@@ -778,7 +778,7 @@ void HudDrawGraphics(int centre)
         }
 
         const char *label = (i == kTotal - 1) ? "FPS CAP" : kRows[i].label;
-        snprintf(line, sizeof line, "%-11s %s", label, value);
+        snprintf(line, sizeof line, "%-12s %s", label, value);
         DrawTextPix(assets.font, line, V2(x, rowY), 1,
                     sel ? (Color){ 255, 236, 159, 255 } : COL_SHALLOW);
 

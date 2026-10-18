@@ -400,6 +400,29 @@ int EnemiesAliveCount(void)
     return n;
 }
 
+/* --------------------------------------------------------------------------
+ *  AEGIS gate
+ *
+ *  The dome is the squadron's panic button, so it is kept rare. Once a dome
+ *  goes up the gate closes: the squadron must wait AEGIS_REARM seconds AND
+ *  bank AEGIS_KILL_REQ kills before another may be raised. The gate starts
+ *  open, so the first dome of a run is always free.
+ * ----------------------------------------------------------------------- */
+static float aegisTimer = 0.0f;   /* seconds still owed before AEGIS may fire */
+static int   aegisKills = 0;      /* kills still owed before AEGIS may fire   */
+
+static bool AegisReady(void)
+{
+    return (aegisTimer <= 0.0f && aegisKills <= 0);
+}
+
+/* Arm the gate: called the instant a dome goes up. */
+static void AegisArm(void)
+{
+    aegisTimer = AEGIS_REARM;
+    aegisKills = AEGIS_KILL_REQ;
+}
+
 void EntitiesReset(void)
 {
     for (int i = 0; i < MAX_BULLETS; i++)   g.bullets[i].alive   = false;
@@ -416,6 +439,10 @@ void EntitiesReset(void)
     g.levelUpFlash = 0.0f;
     for (int i = 0; i < FIELD_MAX; i++) g.field[i] = (AegisField){ 0 };
     for (int i = 0; i < MAX_ALLIES; i++) g.allyKills[i] = 0;
+
+    /* a fresh run starts with the AEGIS gate open: the first dome is free */
+    aegisTimer = 0.0f;
+    aegisKills = 0;
 
     /* a fresh run starts cheat-clean: no god, normal speed */
     g_devGod  = false;
@@ -620,8 +647,8 @@ static void RunSpecial(Ally *a, int tag)
            The squadron signature: a shockwave. Enemies get shoved off their
            feet and hurt, their bullets disintegrate mid-air. */
         case SP_OVERSURGE: {
-            for (int i = 0; i < MAX_ENEMIES; i++) {
-                Enemy *e = &g.enemies[i];
+            for (int qk = 0; qk < g_enemyCount; qk++) {
+                Enemy *e = &g.enemies[g_enemyIdx[qk]];
                 if (!e->alive || e->spawnFade > 0.0f) continue;
 
                 float d = Dist2(e->pos, at);
@@ -822,6 +849,18 @@ void PlayerSpecial(void)
     int sel = (p->specialSel >= 0 && p->specialSel < SPECIAL_KIND_COUNT)
               ? p->specialSel : 0;
 
+    /* AEGIS is gated: once a dome goes up the squadron owes AEGIS_REARM
+       seconds and AEGIS_KILL_REQ kills before another one may be raised. */
+    if (sel == SP_AEGIS && !AegisReady() && !g_devGod) {
+        char buf[64];
+        snprintf(buf, sizeof buf, "AEGIS RECHARGING - %ds / %d KILLS",
+                 (aegisTimer > 0.0f) ? (int)ceilf(aegisTimer) : 0,
+                 (aegisKills > 0) ? aegisKills : 0);
+        TextCopy(g.message, buf);
+        g.messageTimer = 1.3f;
+        return;   /* no cast, and no cooldown burned */
+    }
+
     RunSpecial(NULL, sel);
     /* in god mode the ultimate never has to breathe */
     p->specialTimer = g_devGod ? 0.0f : kSpecials[sel].cooldown;
@@ -862,10 +901,16 @@ void FieldCast(Ally *caster)
     SpawnBurst(f->pos, 2.2f);
     SpawnBurstParticles(f->pos, 1.6f, COL_HEAL);
     PlaySfx(assets.shield, 0.5f, 0.9f);
+
+    /* a dome just went up: close the gate until the squadron waits it out
+       and earns the next one */
+    AegisArm();
 }
 
 void FieldUpdate(float dt)
 {
+    if (aegisTimer > 0.0f) aegisTimer -= dt;
+
     for (int slot = 0; slot < FIELD_MAX; slot++) {
     AegisField *f = &g.field[slot];
     if (!f->alive) continue;
@@ -904,8 +949,8 @@ void FieldUpdate(float dt)
     float burn  = 13.0f * (float)stack * dt;
     float mend  = FIELD_HEAL * (float)stack * dt;
 
-    for (int i = 0; i < MAX_ENEMIES; i++) {
-        Enemy *e = &g.enemies[i];
+    for (int qk = 0; qk < g_enemyCount; qk++) {
+        Enemy *e = &g.enemies[g_enemyIdx[qk]];
         if (!e->alive || e->spawnFade > 0.0f) continue;
         if (Dist2(e->pos, f->pos) > r2) continue;
 
@@ -1225,6 +1270,7 @@ void DamageEnemy(Enemy *e, float amount)
     e->alive = false;
     g.score += e->score;
     g.kills++;
+    if (aegisKills > 0) aegisKills--;   /* kills pay down the AEGIS gate */
     SpecialsKillRefund(e->elite ? SPECIAL_ELITE_REFUND : SPECIAL_KILL_REFUND);
 
     bool big = (e->kind == ENEMY_HEAVY || e->kind == ENEMY_SPLITTER || e->elite);
@@ -1340,8 +1386,8 @@ static void EnemyShoot(Enemy *e)
         /* Not a gun at all: the tender's pulse fixes up everything nearby. */
         case ENEMY_TENDER: {
             float reach = 150.0f;
-            for (int i = 0; i < MAX_ENEMIES; i++) {
-                Enemy *o = &g.enemies[i];
+            for (int qk = 0; qk < g_enemyCount; qk++) {
+                Enemy *o = &g.enemies[g_enemyIdx[qk]];
                 if (!o->alive || o->spawnFade > 0.0f) continue;
                 if (Dist2(o->pos, e->pos) > reach * reach) continue;
 
@@ -1365,13 +1411,26 @@ static void EnemyShoot(Enemy *e)
     }
 }
 
+/* The compact lists the hot loops walk instead of the full pools. */
+int g_enemyIdx[MAX_ENEMIES];
+int g_enemyCount = 0;
+int g_bulletIdx[MAX_BULLETS];
+int g_bulletCount = 0;
+
+void EnemiesRebuildActive(void)
+{
+    g_enemyCount = 0;
+    for (int i = 0; i < MAX_ENEMIES; i++)
+        if (g.enemies[i].alive) g_enemyIdx[g_enemyCount++] = i;
+}
+
 void EnemiesUpdate(float dt)
 {
     float speedScale = 1.0f + g.difficulty * 0.030f;
     float fireScale  = fmaxf(0.45f, 1.0f - g.difficulty * 0.030f);
 
-    for (int i = 0; i < MAX_ENEMIES; i++) {
-        Enemy *e = &g.enemies[i];
+    for (int qi = 0; qi < g_enemyCount; qi++) {
+        Enemy *e = &g.enemies[g_enemyIdx[qi]];
         if (!e->alive) continue;
 
         if (e->hitFlash  > 0.0f) e->hitFlash  -= dt * 5.0f;
@@ -1415,9 +1474,10 @@ void EnemiesUpdate(float dt)
 
         e->pos = V2Add(e->pos, V2Scale(e->vel, dt));
 
-        /* light separation so ships do not overlap */
-        for (int j = i + 1; j < MAX_ENEMIES; j++) {
-            Enemy *o = &g.enemies[j];
+        /* light separation so ships do not overlap. Only the live list is
+           walked, so this stays an n^2 over what is on screen, not the pool. */
+        for (int qj = qi + 1; qj < g_enemyCount; qj++) {
+            Enemy *o = &g.enemies[g_enemyIdx[qj]];
             if (!o->alive) continue;
 
             Vector2 d  = V2Sub(e->pos, o->pos);
@@ -1486,8 +1546,8 @@ void EnemiesUpdate(float dt)
 
 void EnemiesDraw(void)
 {
-    for (int i = 0; i < MAX_ENEMIES; i++) {
-        Enemy *e = &g.enemies[i];
+    for (int qi = 0; qi < g_enemyCount; qi++) {
+        Enemy *e = &g.enemies[g_enemyIdx[qi]];
         if (!e->alive) continue;
 
         EnemyLook look = EnemyLookOf(e->kind);
@@ -1660,8 +1720,8 @@ int EnemiesNear(Vector2 from, float radius)
     float r2 = radius * radius;
     int   n  = 0;
 
-    for (int i = 0; i < MAX_ENEMIES; i++) {
-        Enemy *e = &g.enemies[i];
+    for (int qi = 0; qi < g_enemyCount; qi++) {
+        Enemy *e = &g.enemies[g_enemyIdx[qi]];
         if (!e->alive || e->spawnFade > 0.0f) continue;
         if (Dist2(e->pos, from) < r2) n++;
     }
@@ -2089,8 +2149,8 @@ void AlliesUpdate(float dt)
         float  bestD  = ALLY_ENGAGE_RANGE * ALLY_ENGAGE_RANGE;
 
         /* 1. enemies that are shooting at the player */
-        for (int k = 0; k < MAX_ENEMIES; k++) {
-            Enemy *e = &g.enemies[k];
+        for (int qk = 0; qk < g_enemyCount; qk++) {
+            Enemy *e = &g.enemies[g_enemyIdx[qk]];
             if (!e->alive || e->spawnFade > 0.0f) continue;
             /* check if this enemy is firing towards the player */
             Vector2 toPlayer = V2Sub(g.player.pos, e->pos);
@@ -2105,8 +2165,8 @@ void AlliesUpdate(float dt)
 
         /* 2. closest enemy to player as fallback */
         if (!target) {
-            for (int k = 0; k < MAX_ENEMIES; k++) {
-                Enemy *e = &g.enemies[k];
+            for (int qk = 0; qk < g_enemyCount; qk++) {
+                Enemy *e = &g.enemies[g_enemyIdx[qk]];
                 if (!e->alive || e->spawnFade > 0.0f) continue;
                 float d = Dist2(e->pos, g.player.pos);
                 if (d < bestD) { bestD = d; target = e; }
@@ -2115,8 +2175,8 @@ void AlliesUpdate(float dt)
 
         /* 3. any enemy within engage range */
         if (!target) {
-            for (int k = 0; k < MAX_ENEMIES; k++) {
-                Enemy *e = &g.enemies[k];
+            for (int qk = 0; qk < g_enemyCount; qk++) {
+                Enemy *e = &g.enemies[g_enemyIdx[qk]];
                 if (!e->alive || e->spawnFade > 0.0f) continue;
                 float d = Dist2(e->pos, a->pos);
                 if (d < bestD) { bestD = d; target = e; }
@@ -2137,8 +2197,8 @@ void AlliesUpdate(float dt)
                happen to be closest to - that is what "backup" means */
             Enemy *threat = NULL;
             float  threatD = ALLY_ENGAGE_RANGE * ALLY_ENGAGE_RANGE;
-            for (int k = 0; k < MAX_ENEMIES; k++) {
-                Enemy *e = &g.enemies[k];
+            for (int qk = 0; qk < g_enemyCount; qk++) {
+                Enemy *e = &g.enemies[g_enemyIdx[qk]];
                 if (!e->alive || e->spawnFade > 0.0f) continue;
                 float d = Dist2(e->pos, g.player.pos);
                 if (d < threatD) { threatD = d; threat = e; }
@@ -2303,7 +2363,9 @@ void AlliesUpdate(float dt)
                              a->spreadTimer > 0.0f ||
                              a->homingTimer > 0.0f) ? 0.66f : 1.0f;
 
-                if (a->specialTimer <= 0.0f && range < 300.0f) {
+                if (a->specialTimer <= 0.0f && range < 300.0f &&
+                    (RoleSpecial(a->role, a->specialSel) != SP_AEGIS ||
+                     AegisReady())) {
                     /* the special is what makes each pilot fly differently */
                     static const char *const kCry[ALLY_ROLE_COUNT] = {
                         "SCATTER, ASSHOLES!", "AEGIS UP.", "WASPS AWAY! RUN! ...THEY RUN!"
@@ -2435,8 +2497,14 @@ void RallyDraw(void)
  * ----------------------------------------------------------------------- */
 void BulletsUpdate(float dt)
 {
-    for (int i = 0; i < MAX_BULLETS; i++) {
-        Bullet *b = &g.bullets[i];
+    /* Rebuild the live list here (not at frame start) so shots fired earlier
+       this same frame still get their first step of travel. */
+    g_bulletCount = 0;
+    for (int i = 0; i < MAX_BULLETS; i++)
+        if (g.bullets[i].alive) g_bulletIdx[g_bulletCount++] = i;
+
+    for (int qb = 0; qb < g_bulletCount; qb++) {
+        Bullet *b = &g.bullets[g_bulletIdx[qb]];
         if (!b->alive) continue;
 
         /* Seekers steer toward the closest thing still in the air. */
@@ -2445,8 +2513,8 @@ void BulletsUpdate(float dt)
             float   bestD = 300.0f * 300.0f;
             bool    found = false;
 
-            for (int k = 0; k < MAX_ENEMIES; k++) {
-                Enemy *e = &g.enemies[k];
+            for (int qk = 0; qk < g_enemyCount; qk++) {
+                Enemy *e = &g.enemies[g_enemyIdx[qk]];
                 if (!e->alive || e->spawnFade > 0.0f) continue;
 
                 float d = Dist2(e->pos, b->pos);
@@ -2489,8 +2557,8 @@ void BulletsUpdate(float dt)
         float radius = BULLET_RADIUS * b->scale;
 
         if (b->owner != BULLET_ENEMY) {
-            for (int k = 0; k < MAX_ENEMIES; k++) {
-                Enemy *e = &g.enemies[k];
+            for (int qk = 0; qk < g_enemyCount; qk++) {
+                Enemy *e = &g.enemies[g_enemyIdx[qk]];
                 if (!e->alive || e->spawnFade > 0.0f) continue;
 
                 float rr = e->radius + radius;
@@ -2561,8 +2629,8 @@ void BulletsUpdate(float dt)
 
 void BulletsDraw(void)
 {
-    for (int i = 0; i < MAX_BULLETS; i++) {
-        Bullet *b = &g.bullets[i];
+    for (int qb = 0; qb < g_bulletCount; qb++) {
+        Bullet *b = &g.bullets[g_bulletIdx[qb]];
         if (!b->alive) continue;
 
         Color tint;

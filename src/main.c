@@ -686,8 +686,8 @@ static void GatherInput(void)
            soon as anything hostile exists on the map */
         Enemy *best = NULL;
         float bestD = 1.0e30f;
-        for (int i = 0; i < MAX_ENEMIES; i++) {
-            Enemy *e = &g.enemies[i];
+        for (int qi = 0; qi < g_enemyCount; qi++) {
+            Enemy *e = &g.enemies[g_enemyIdx[qi]];
             if (!e->alive || e->spawnFade > 0.0f) continue;
             float d = Dist2(e->pos, g.player.pos);
             if (d < bestD) { bestD = d; best = e; }
@@ -799,10 +799,11 @@ static void AutoPilotInput(float dt)
        where we are heading */
     Enemy *best = NULL;
     float bestD = 430.0f * 430.0f;
-    for (int i = 0; i < MAX_ENEMIES; i++) {
-        if (!g.enemies[i].alive) continue;
-        float d = Dist2(g.enemies[i].pos, g.player.pos);
-        if (d < bestD) { bestD = d; best = &g.enemies[i]; }
+    for (int qi = 0; qi < g_enemyCount; qi++) {
+        Enemy *e = &g.enemies[g_enemyIdx[qi]];
+        if (!e->alive) continue;
+        float d = Dist2(e->pos, g.player.pos);
+        if (d < bestD) { bestD = d; best = e; }
     }
 
     Vector2 aim = (best) ? V2Norm(V2Sub(best->pos, g.player.pos))
@@ -1443,13 +1444,13 @@ static void SetFullscreen(bool on)
 }
 #endif
 
+#if !defined(__EMSCRIPTEN__)
 static bool       exclOn   = false;
 static Vector2    exclPrevPos = { 0, 0 };
 static int        exclPrevW = 0, exclPrevH = 0;
 
 static void SetExclusiveFullscreen(bool on)
 {
-#if !defined(__EMSCRIPTEN__)
     if (on == exclOn) return;
     if (on) {
         exclPrevPos = GetWindowPosition();
@@ -1462,12 +1463,10 @@ static void SetExclusiveFullscreen(bool on)
         SetWindowPosition((int)exclPrevPos.x, (int)exclPrevPos.y);
     }
     exclOn = on;
-#endif
 }
 
 static void ApplyWindowedSize(void)
 {
-#if !defined(__EMSCRIPTEN__)
     static const int kWs[3][2] = { {1280, 720}, {1600, 900}, {1920, 1080} };
     if (gfx.winSize <= 0) { FitWindowToIntegerScale(START_CENTER); return; }
     int w = kWs[gfx.winSize - 1][0];
@@ -1477,12 +1476,15 @@ static void ApplyWindowedSize(void)
     SetWindowSize(w, h);
     if (monW > 0 && monH > 0)
         SetWindowPosition((monW - w) / 2, (monH - h) / 2);
-#endif
 }
+#endif
 
+/* 0 windowed, 1 borderless, 2 exclusive-full (falls back to borderless on
+   monitors whose aspect does not match the 16:9 design). The browser owns
+   its own display mode, so the web build has no version of this at all. */
+#if !defined(__EMSCRIPTEN__)
 static void SetWindowMode(int mode)
 {
-#if !defined(__EMSCRIPTEN__)
     if (fullscreenOn) SetFullscreen(false);
     if (exclOn)       SetExclusiveFullscreen(false);
     switch (mode) {
@@ -1498,8 +1500,8 @@ static void SetWindowMode(int mode)
         default: ApplyWindowedSize(); break;
     }
     gfx.display = mode;
-#endif
 }
+#endif
 
 /* --------------------------------------------------------------------------
  *  Global keys
@@ -1626,10 +1628,16 @@ static void HandleGlobalKeys(void)
                             break;
                         }
                         case 9: {
-                            /* window mode: 0 windowed, 1 borderless, 2 exclusive */
+                            /* window mode: 0 windowed, 1 borderless, 2 exclusive.
+                               The browser owns display mode, so the row is
+                               display-only on the web (HUD shows N/A). */
+#if defined(__EMSCRIPTEN__)
+                            break;
+#else
                             gfx.display = (gfx.display + dir + 3) % 3;
                             SetWindowMode(gfx.display);
                             break;
+#endif
                         }
                         case 10: {
 #if !defined(__EMSCRIPTEN__)
@@ -1943,6 +1951,10 @@ int main(int argc, char **argv)
 #endif
         float dt = FrameDeltaTime();
         g.timer += dt;
+
+        /* Refresh the live-entity lists once per frame, before anything reads
+           them. The pools are huge; the hot inner loops walk these instead. */
+        EnemiesRebuildActive();
 
         HandleGlobalKeys();
 
