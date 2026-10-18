@@ -1,0 +1,111 @@
+name: Release
+
+# Builds ready-to-run binaries for every platform we can from one recipe:
+# Windows x64, Linux x64 and macOS (arm64). On a version tag the results are
+# attached to the GitHub release, so the download page always carries the
+# current .exe / .tar.gz next to the web build.
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows-x64
+            archive: pixel-squadron-windows-x64.zip
+          - os: ubuntu-latest
+            platform: linux-x64
+            archive: pixel-squadron-linux-x64.tar.gz
+          - os: macos-latest
+            platform: macos-arm64
+            archive: pixel-squadron-macos-arm64.tar.gz
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # GLFW (via raylib) needs the X11 + GL headers that are not on the
+      # bare ubuntu image.
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgl1-mesa-dev libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxi-dev
+
+      - name: Configure (Release)
+        run: cmake -S . -B build-rel -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build-rel --config Release --parallel 4
+
+      - name: Stage the download
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Single-config generators put the binary at build-rel/, Visual
+          # Studio nests it one level deeper in build-rel/Release/.
+          BIN=""
+          for cand in \
+              build-rel/pixel_squadron \
+              build-rel/pixel_squadron.exe \
+              build-rel/Release/pixel_squadron.exe; do
+            if [ -f "$cand" ]; then BIN="$cand"; fi
+          done
+          if [ -z "$BIN" ]; then
+            echo "could not find the built binary" >&2
+            find build-rel -maxdepth 2 -type f | head -50 >&2
+            exit 1
+          fi
+
+          PKG="pixel-squadron-${{ matrix.platform }}"
+          rm -rf "$PKG"
+          mkdir -p "$PKG/assets"
+
+          cp "$BIN" "$PKG/"
+          cp -r assets/audio assets/fonts assets/sprites "$PKG/assets/"
+          cp assets/CREDITS.md "$PKG/assets/"
+          cp LICENSE            "$PKG/LICENSE"
+          cp packaging/README-INSTALL.txt "$PKG/README.txt"
+
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a "${{ matrix.archive }}" "./$PKG/*" > /dev/null
+          else
+            tar -czf "${{ matrix.archive }}" "$PKG"
+          fi
+
+          ls -la "${{ matrix.archive }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive }}
+          path: ${{ matrix.archive }}
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Attach binaries to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

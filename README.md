@@ -11,6 +11,15 @@ your three wingmen, who chat, bicker and (usually) have your back.
 
 <https://cflixdev-projects.github.io/pixel-squadron/>
 
+## Download
+
+Prebuilt, ready-to-run binaries live on the
+[releases page](https://github.com/cflixdev-projects/pixel-squadron/releases):
+a Windows `.exe` (zipped with its assets), a Linux x64 `.tar.gz` and a macOS
+`.tar.gz`. Unzip, keep the folder together, and run the program - there is no
+installer. Every release also carries its own `README.txt` with the run and
+control notes.
+
 ## Features
 
 - **Twin-stick combat** - move with WASD, aim with the mouse, fire with LMB.
@@ -37,6 +46,10 @@ your three wingmen, who chat, bicker and (usually) have your back.
   one is loaded at a time. `TAB` (or `1`-`8`) picks the move, `E` fires it,
   and each move reloads at its own pace depending on how strong it is. On a
   pad the D-pad cycles the bag and `Y` fires it.
+- **AEGIS domes** - a wingman's AEGIS move drops a bubble that shoves the swarm
+  off, burns it and mends everyone inside. It is a panic button, not a
+  lifestyle: once a dome goes up the squadron must wait 15 seconds **and** bank
+  15 kills before another can be raised. The first dome of a run is free.
 - **Auto-shoot mode** - press `V` (`A` on the pad) and the guns take over:
   the aim snaps to the nearest enemy and keeps firing while you concentrate on
   flying and timing specials. A badge on the HUD says when it is on; press it
@@ -71,11 +84,14 @@ your three wingmen, who chat, bicker and (usually) have your back.
   MEDIUM / HIGH) or flip individual effects. **Bloom** offers four levels
   (OFF / SOFT / MED / STRONG) for the soft glow on shots and explosions,
   and there are separate toggles for the CRT screen look, the vignette,
-  particle density, explosion smoke and motion blur. **VSYNC** can be
-  flipped live; **AA (MSAA)** is applied the next time you launch. The fps
-  cap (FREE/30/60/120/144) lives on the same panel, and everything,
-  including the pad bindings, saves to `settings.cfg` the moment you touch
-  it.
+  particle density, explosion smoke, motion blur and screen shake. **DISPLAY**
+  switches between windowed, borderless and true exclusive fullscreen, and
+  **WINDOW SIZE** pins a window to `1280x720`, `1600x900` or `1920x1080` (or
+  `AUTO` for a pixel-perfect fit). A **VOLUME** row sets the master gain from
+  0% to 100%, and **VSYNC** can be flipped live. **AA (MSAA)** is applied the
+  next time you launch. The fps cap (FREE/30/60/120/144) lives on the same
+  panel, and everything, including the pad bindings, saves to `settings.cfg`
+  the moment you touch it.
 - **Dev cheat console** - press `Ctrl+Y` in flight for a chat-box style cheat
   console with the cheat list shown the moment it opens: `god` (no damage,
   specials never need to recharge and the boost tank never runs dry),
